@@ -201,7 +201,7 @@ npm run typecheck # tsc --noEmit
 |---|---|---|---|
 | Q1 | 项目根目录里的 `index.html` 是一个无关的井字棋页面（2026-09-11 生成）。Vite 要求入口 `index.html` 位于根目录，两者冲突。 | 曾阻塞阶段 B | **已解决**（2026-09-11）：该文件确认与本项目无关，移入 `scratch/` 保留；根 `index.html` 改写为本项目入口。见 04 §8 |
 | Q2 | 本机未安装 git（`git` 不在 PATH，常见安装路径也没有），项目目前**没有版本控制**，也没有回滚保护。 | 影响所有阶段的可恢复性 | **待用户决定**：装 git，还是接受无 VCS |
-| Q3 | iOS PWA 需要一个 HTTPS 地址。建议 GitHub Pages（免费、自带 HTTPS、子路径即 §4 的 `base`），但需要确认账号与仓库名。 | ✅ 2026-09-12：`SMMT543345/牧童`；部署工作流 `.github/workflows/deploy.yml` 已就位（推送到 main 自动构建+发布），待用户把代码推到仓库后生效。站点：`https://smmt543345.github.io/牧童/` |
+| Q3 | iOS PWA 需要一个 HTTPS 地址。建议 GitHub Pages（免费、自带 HTTPS、子路径即 §4 的 `base`），但需要确认账号与仓库名。 | ✅ 2026-09-12：`SMMT543345/新作`；部署工作流 `.github/workflows/deploy.yml` 已就位（推送到 main 自动构建+发布），待用户把代码推到仓库后生效。站点：`https://smmt543345.github.io/新作/` |
 | Q4 | Tailwind v4 要求 Node ≥ 20 与现代浏览器；Tauri 的 WebView2 与安卓 WebView（Android 7+）均满足。若后续要支持更老的安卓机，需回退 v3。 | 影响阶段 B | 暂按 v4，实测后再定 |
 
 ## 10. 后续项（明确不在 v1）

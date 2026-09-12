@@ -16,8 +16,8 @@ import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const DIST = resolve(fileURLToPath(new URL('.', import.meta.url)), '..', 'dist');
-// 与 vite.config.ts 的 web base 保持一致（Q3：SMMT543345/牧童）
-const BASE = '/牧童/';
+// 与 vite.config.ts 的 web base 保持一致（Q3：SMMT543345/新作）
+const BASE = '/新作/';
 const PORT = 4173;
 
 const MIME = {
@@ -64,7 +64,7 @@ async function resolveFile(pathname) {
 
 createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
-  // 浏览器会把 /牧童/ 按百分号编码发来，先解码再比较；Location 头必须回 ASCII（Node 拒绝裸中文）
+  // 浏览器会把 /新作/ 按百分号编码发来，先解码再比较；Location 头必须回 ASCII（Node 拒绝裸中文）
   let pathname = url.pathname;
   try {
     pathname = decodeURIComponent(url.pathname);
