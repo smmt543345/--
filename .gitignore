@@ -1,0 +1,14 @@
+# 依赖与构建产物不进仓库：GitHub Actions 在云端 npm ci 安装依赖、重新构建
+node_modules/
+dist/
+
+# 本机工具目录
+.thincoder/
+
+# 与本项目无关的暂存内容（Q1：旧井字棋页面等）
+scratch/
+
+# 系统杂项
+.DS_Store
+Thumbs.db
+*.log

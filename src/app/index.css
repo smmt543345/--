@@ -1,0 +1,76 @@
+@import 'tailwindcss';
+
+/*
+ * 主题：默认跟随系统；手动覆盖时把 data-theme 写到 <html> 上（见 platform/theme.ts）。
+ * Tailwind v4 的 dark: 变体默认只看 prefers-color-scheme，这里改写成也认 data-theme，
+ * 否则「手动选深色」在系统是浅色时不会有任何效果。
+ */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/*
+ * 视觉基调（04 §10）：精致极简。全局令牌只在这一个文件里定——
+ * 字体、抗锯齿、选区、滚动条、焦点环、标题字距。
+ */
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* 标题收紧字距：中文字形下微微收紧更显精致 */
+h1,
+h2,
+h3 {
+  letter-spacing: -0.015em;
+}
+
+::selection {
+  background: rgb(37 99 235 / 0.16);
+}
+
+/* 键盘导航的焦点环：细、蓝、不抢戏 */
+:focus-visible {
+  outline: 2px solid rgb(37 99 235 / 0.45);
+  outline-offset: 2px;
+}
+
+/* 细滚动条：默认滚动条在精致界面上太重 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(120 120 120 / 0.32);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(120 120 120 / 0.55);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+/* 主题切换时颜色平滑过渡（150ms，不拖沓）。
+ * 必须放在 @layer base 里：不进层级的 CSS 会盖过 Tailwind 的 utility 层，
+ * 把按钮等组件自己的 transition-* 工具类全部压死。 */
+@layer base {
+  body,
+  body * {
+    transition-property: background-color, border-color;
+    transition-duration: 150ms;
+    transition-timing-function: ease-out;
+  }
+}

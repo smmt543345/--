@@ -1,0 +1,1216 @@
+# 历史学读书会网站：从零开发到 AI 持续更新完整指南
+
+下面是一份完整的开发与维护指南，涵盖从需求分析、技术设计、后端开发、前端开发，到用 AI 持续更新的全流程。每个部分都配有中文说明，你可以按顺序阅读和执行。
+
+
+# 第一部分：项目概述与需求分析
+
+## 1.1 项目背景
+
+历史学读书会需要一个专属网站，用于管理活动签到、沉淀书目库、促进成员交流、发布读书会动态。网站以 Web 形式呈现，手机浏览器可正常访问，后续可扩展为微信小程序。
+
+## 1.2 核心功能
+
+| 模块 | 功能 | 说明 |
+|---|---|---|
+| 用户系统 | 注册、登录、个人中心 | JWT 鉴权，角色分为游客、成员、管理员 |
+| 活动签到 | 创建活动、签到、签到统计 | 支持时间窗校验、重复签到拦截 |
+| 书目库 | 添加书目、推荐审核、搜索筛选 | 每本书可关联多次活动 |
+| 交流论坛 | 发帖、评论、点赞 | 可关联书目或活动 |
+| 动态发布 | 管理员发布通知、首页展示 | 支持置顶 |
+| 通知系统 | 被评论通知、活动提醒 | 迭代功能 |
+
+## 1.3 角色权限
+
+- **游客**：浏览公开内容
+- **成员**：签到、发帖、评论、推荐书目
+- **管理员**：全部权限 + 活动管理、书目审核、动态发布
+
+## 1.4 页面清单
+
+| 页面 | 路由 | 核心功能 |
+|---|---|---|
+| 登录/注册 | `/login` `/register` | 身份认证 |
+| 首页 | `/` | 动态、近期活动、最新书目、最新帖子 |
+| 活动列表/详情 | `/events` `/events/:id` | 浏览、签到 |
+| 书目库/详情 | `/books` `/books/:id` | 搜索筛选、元数据、讨论 |
+| 交流区/帖子详情 | `/forum` `/forum/:id` | 发帖、评论 |
+| 动态列表 | `/news` | 公告浏览 |
+| 个人中心 | `/me` | 我的签到、帖子、推荐 |
+| 管理后台 | `/admin` | 全模块管理 |
+
+
+# 第二部分：技术架构与项目结构
+
+## 2.1 技术栈选择
+
+| 层级 | 选择 | 理由 |
+|---|---|---|
+| 后端 | Python Flask | 轻量灵活，适合快速开发 RESTful API |
+| 前端 | Vue 3 + Element Plus | 组合式 API，组件库丰富，响应式适配好 |
+| 数据库 | SQLite（开发）→ MySQL（生产） | 开发零配置，生产更稳定 |
+| ORM | Flask-SQLAlchemy | Flask 生态最成熟的 ORM |
+| 认证 | Flask-JWT-Extended | 无状态会话，便于扩展 |
+| 密码加密 | Flask-Bcrypt | 安全哈希 |
+| 跨域 | Flask-CORS | 前后端分离必需 |
+| 迁移 | Flask-Migrate | 数据库版本管理 |
+| 构建 | Vite | 前端快速构建 |
+| 状态管理 | Pinia | Vue 3 官方推荐 |
+
+## 2.2 项目目录结构
+
+```
+history-reading-club/
+├── backend/
+│   ├── app/
+│   │   ├── __init__.py          # 应用工厂
+│   │   ├── models.py            # 数据模型
+│   │   ├── config.py            # 配置
+│   │   ├── routes/              # 路由模块
+│   │   │   ├── auth.py          # 认证
+│   │   │   ├── events.py        # 活动与签到
+│   │   │   ├── books.py         # 书目
+│   │   │   ├── posts.py         # 帖子与评论
+│   │   │   └── news.py          # 动态
+│   │   └── utils/
+│   │       ├── auth_middleware.py  # 权限装饰器
+│   │       └── response.py         # 统一响应
+│   ├── migrations/              # 数据库迁移
+│   ├── requirements.txt
+│   └── run.py
+├── frontend/
+│   ├── src/
+│   │   ├── views/               # 页面组件
+│   │   ├── components/          # 通用组件
+│   │   ├── api/                 # API 请求封装
+│   │   ├── router/              # 路由配置
+│   │   ├── stores/              # Pinia 状态
+│   │   └── App.vue
+│   ├── package.json
+│   └── vite.config.js
+├── README.md
+└── CHANGELOG.md
+```
+
+
+# 第三部分：数据模型设计
+
+## 3.1 核心数据表
+
+数据模型是整个网站的地基，定义了系统中有哪些对象、对象之间如何关联。
+
+```python
+# backend/app/models.py
+from datetime import datetime
+from . import db
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    password_hash = db.Column(db.String(128), nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    role = db.Column(db.String(20), default='member')  # admin/member
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    checkins = db.relationship('Checkin', backref='user', lazy=True)
+    posts = db.relationship('Post', backref='user', lazy=True)
+
+class Event(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text)
+    event_date = db.Column(db.DateTime)
+    location = db.Column(db.String(200))
+    checkin_start = db.Column(db.DateTime)
+    checkin_end = db.Column(db.DateTime)
+    max_participants = db.Column(db.Integer, nullable=True)  # 人数上限
+    status = db.Column(db.String(20), default='draft')
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    checkins = db.relationship('Checkin', backref='event', lazy=True)
+
+class Checkin(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    event_id = db.Column(db.Integer, db.ForeignKey('event.id'), nullable=False)
+    checkin_time = db.Column(db.DateTime, default=datetime.utcnow)
+    method = db.Column(db.String(20), default='button')
+    __table_args__ = (db.UniqueConstraint('user_id', 'event_id'),)
+
+class Book(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    author = db.Column(db.String(100))
+    publisher = db.Column(db.String(100))
+    year = db.Column(db.Integer)
+    isbn = db.Column(db.String(20))
+    cover_url = db.Column(db.String(500))
+    description = db.Column(db.Text)
+    tags = db.Column(db.String(200))
+    status = db.Column(db.String(20), default='pending')  # pending/approved/archived
+    added_by = db.Column(db.Integer, db.ForeignKey('user.id'))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class EventBook(db.Model):
+    event_id = db.Column(db.Integer, db.ForeignKey('event.id'), primary_key=True)
+    book_id = db.Column(db.Integer, db.ForeignKey('book.id'), primary_key=True)
+
+class Post(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    book_id = db.Column(db.Integer, db.ForeignKey('book.id'), nullable=True)
+    event_id = db.Column(db.Integer, db.ForeignKey('event.id'), nullable=True)
+    title = db.Column(db.String(200), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    is_top = db.Column(db.Boolean, default=False)
+    is_essence = db.Column(db.Boolean, default=False)
+    status = db.Column(db.String(20), default='normal')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    comments = db.relationship('Comment', backref='post', lazy=True)
+
+class Comment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    post_id = db.Column(db.Integer, db.ForeignKey('post.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class News(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    cover_url = db.Column(db.String(500))
+    is_top = db.Column(db.Boolean, default=False)
+    author_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    published_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class Notification(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    type = db.Column(db.String(50))  # comment/checkin_reminder/approve
+    content = db.Column(db.Text)
+    is_read = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+```
+
+## 3.2 表关系说明
+
+- User ↔ Event：一个管理员创建多个活动（一对多）
+- User ↔ Checkin ↔ Event：用户通过签到表与活动建立多对多关系
+- Event ↔ Book：通过 event_books 中间表实现多对多
+- Post 可选关联 Book 或 Event，也可都不关联（自由讨论）
+- Post ↔ Comment：一个帖子有多个评论（一对多）
+- Notification 关联用户，用于站内通知
+
+
+# 第四部分：后端开发
+
+## 4.1 初始化 Flask 项目
+
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install flask flask-sqlalchemy flask-jwt-extended flask-bcrypt flask-cors flask-migrate
+pip freeze > requirements.txt
+```
+
+## 4.2 应用工厂与配置
+
+**app/config.py**
+```python
+import os
+
+class Config:
+    SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-secret-key')
+    SQLALCHEMY_DATABASE_URI = 'sqlite:///reading_club.db'
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+    JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'jwt-dev-secret')
+    JWT_ACCESS_TOKEN_EXPIRES = 3600 * 24 * 7  # 7 天
+```
+
+**app/__init__.py**
+```python
+from flask import Flask, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from flask_jwt_extended import JWTManager
+from flask_bcrypt import Bcrypt
+from flask_cors import CORS
+from flask_migrate import Migrate
+from .config import Config
+
+db = SQLAlchemy()
+jwt = JWTManager()
+bcrypt = Bcrypt()
+migrate = Migrate()
+
+def create_app():
+    app = Flask(__name__)
+    app.config.from_object(Config)
+
+    db.init_app(app)
+    jwt.init_app(app)
+    bcrypt.init_app(app)
+    migrate.init_app(app, db)
+    CORS(app, supports_credentials=True)
+
+    from .routes.auth import auth_bp
+    from .routes.events import event_bp
+    from .routes.books import book_bp
+    from .routes.posts import post_bp
+    from .routes.news import news_bp
+
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(event_bp)
+    app.register_blueprint(book_bp)
+    app.register_blueprint(post_bp)
+    app.register_blueprint(news_bp)
+
+    @app.errorhandler(404)
+    def not_found(e):
+        return jsonify({'error': '资源不存在'}), 404
+
+    @app.errorhandler(500)
+    def server_error(e):
+        return jsonify({'error': '服务器内部错误'}), 500
+
+    return app
+```
+
+**run.py**
+```python
+from app import create_app, db
+
+app = create_app()
+
+if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
+    app.run(debug=True, port=5000)
+```
+
+## 4.3 权限装饰器
+
+**app/utils/auth_middleware.py**
+```python
+from functools import wraps
+from flask import request, jsonify
+from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
+from app.models import User
+
+def require_login(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            verify_jwt_in_request()
+        except Exception:
+            return jsonify({'error': '未登录或 Token 无效'}), 401
+        identity = get_jwt_identity()
+        user = User.query.get(identity['id'])
+        if not user:
+            return jsonify({'error': '用户不存在'}), 401
+        request.current_user = user
+        return func(*args, **kwargs)
+    return wrapper
+
+def require_admin(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            verify_jwt_in_request()
+        except Exception:
+            return jsonify({'error': '未登录或 Token 无效'}), 401
+        identity = get_jwt_identity()
+        user = User.query.get(identity['id'])
+        if not user or user.role != 'admin':
+            return jsonify({'error': '无管理员权限'}), 403
+        request.current_user = user
+        return func(*args, **kwargs)
+    return wrapper
+```
+
+## 4.4 认证模块
+
+**app/routes/auth.py**
+```python
+from flask import Blueprint, request, jsonify
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
+from app import db, bcrypt
+from app.models import User
+
+auth_bp = Blueprint('auth', __name__)
+
+@auth_bp.route('/api/auth/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    username = data.get('username')
+    email = data.get('email')
+    password = data.get('password')
+
+    if not username or not email or not password:
+        return jsonify({'error': '缺少必填字段'}), 400
+    if User.query.filter_by(username=username).first():
+        return jsonify({'error': '用户名已存在'}), 409
+    if User.query.filter_by(email=email).first():
+        return jsonify({'error': '邮箱已注册'}), 409
+
+    password_hash = bcrypt.generate_password_hash(password).decode('utf-8')
+    user = User(username=username, email=email, password_hash=password_hash)
+    db.session.add(user)
+    db.session.commit()
+    return jsonify({'message': '注册成功', 'user_id': user.id}), 201
+
+@auth_bp.route('/api/auth/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+
+    user = User.query.filter_by(username=username).first()
+    if not user or not bcrypt.check_password_hash(user.password_hash, password):
+        return jsonify({'error': '用户名或密码错误'}), 401
+
+    access_token = create_access_token(identity={'id': user.id, 'role': user.role})
+    return jsonify({
+        'token': access_token,
+        'user': {'id': user.id, 'username': user.username, 'role': user.role}
+    }), 200
+
+@auth_bp.route('/api/auth/me', methods=['GET'])
+@jwt_required()
+def get_me():
+    identity = get_jwt_identity()
+    user = User.query.get(identity['id'])
+    if not user:
+        return jsonify({'error': '用户不存在'}), 404
+    return jsonify({
+        'id': user.id,
+        'username': user.username,
+        'email': user.email,
+        'role': user.role
+    }), 200
+```
+
+## 4.5 活动与签到模块
+
+**app/routes/events.py**
+```python
+from datetime import datetime
+from flask import Blueprint, request, jsonify
+from app import db
+from app.models import Event, Checkin
+from app.utils.auth_middleware import require_login, require_admin
+
+event_bp = Blueprint('event', __name__)
+
+@event_bp.route('/api/events', methods=['GET'])
+def list_events():
+    events = Event.query.order_by(Event.event_date.desc()).all()
+    result = []
+    for e in events:
+        result.append({
+            'id': e.id,
+            'title': e.title,
+            'description': e.description,
+            'event_date': e.event_date.isoformat() if e.event_date else None,
+            'location': e.location,
+            'max_participants': e.max_participants,
+            'current_count': len(e.checkins),
+            'status': e.status
+        })
+    return jsonify(result), 200
+
+@event_bp.route('/api/events', methods=['POST'])
+@require_admin
+def create_event():
+    data = request.get_json()
+    event = Event(
+        title=data['title'],
+        description=data.get('description', ''),
+        event_date=datetime.fromisoformat(data['event_date']) if data.get('event_date') else None,
+        location=data.get('location', ''),
+        checkin_start=datetime.fromisoformat(data['checkin_start']) if data.get('checkin_start') else None,
+        checkin_end=datetime.fromisoformat(data['checkin_end']) if data.get('checkin_end') else None,
+        max_participants=data.get('max_participants'),
+        status=data.get('status', 'draft'),
+        created_by=request.current_user.id
+    )
+    db.session.add(event)
+    db.session.commit()
+    return jsonify({'message': '活动创建成功', 'id': event.id}), 201
+
+@event_bp.route('/api/events/<int:event_id>', methods=['GET'])
+def get_event(event_id):
+    event = Event.query.get_or_404(event_id)
+    return jsonify({
+        'id': event.id,
+        'title': event.title,
+        'description': event.description,
+        'event_date': event.event_date.isoformat() if event.event_date else None,
+        'location': event.location,
+        'checkin_start': event.checkin_start.isoformat() if event.checkin_start else None,
+        'checkin_end': event.checkin_end.isoformat() if event.checkin_end else None,
+        'max_participants': event.max_participants,
+        'current_count': len(event.checkins),
+        'status': event.status
+    }), 200
+
+@event_bp.route('/api/events/<int:event_id>/checkin', methods=['POST'])
+@require_login
+def checkin(event_id):
+    event = Event.query.get_or_404(event_id)
+    if event.status not in ['published', 'checkin']:
+        return jsonify({'error': '活动未开放签到'}), 400
+
+    now = datetime.utcnow()
+    if event.checkin_start and now < event.checkin_start:
+        return jsonify({'error': '签到未开始'}), 400
+    if event.checkin_end and now > event.checkin_end:
+        return jsonify({'error': '签到已结束'}), 400
+
+    existing = Checkin.query.filter_by(user_id=request.current_user.id, event_id=event_id).first()
+    if existing:
+        return jsonify({'error': '你已经签到过了'}), 409
+
+    if event.max_participants:
+        current = Checkin.query.filter_by(event_id=event_id).count()
+        if current >= event.max_participants:
+            return jsonify({'error': '报名已满'}), 400
+
+    checkin_record = Checkin(user_id=request.current_user.id, event_id=event_id)
+    db.session.add(checkin_record)
+    db.session.commit()
+    return jsonify({'message': '签到成功'}), 200
+
+@event_bp.route('/api/events/<int:event_id>/checkins', methods=['GET'])
+@require_admin
+def list_checkins(event_id):
+    checkins = Checkin.query.filter_by(event_id=event_id).all()
+    return jsonify([{
+        'user_id': c.user_id,
+        'username': c.user.username,
+        'checkin_time': c.checkin_time.isoformat()
+    } for c in checkins]), 200
+```
+
+## 4.6 书目模块
+
+**app/routes/books.py**
+```python
+from flask import Blueprint, request, jsonify
+from app import db
+from app.models import Book
+from app.utils.auth_middleware import require_login, require_admin
+
+book_bp = Blueprint('book', __name__)
+
+@book_bp.route('/api/books', methods=['GET'])
+def list_books():
+    q = request.args.get('q', '')
+    tag = request.args.get('tag', '')
+    query = Book.query.filter_by(status='approved')
+    if q:
+        query = query.filter(Book.title.contains(q) | Book.author.contains(q))
+    if tag:
+        query = query.filter(Book.tags.contains(tag))
+    books = query.order_by(Book.created_at.desc()).all()
+    return jsonify([{
+        'id': b.id, 'title': b.title, 'author': b.author,
+        'publisher': b.publisher, 'year': b.year,
+        'cover_url': b.cover_url, 'tags': b.tags
+    } for b in books]), 200
+
+@book_bp.route('/api/books', methods=['POST'])
+@require_login
+def add_book():
+    data = request.get_json()
+    book = Book(
+        title=data['title'],
+        author=data.get('author', ''),
+        publisher=data.get('publisher', ''),
+        year=data.get('year'),
+        isbn=data.get('isbn', ''),
+        cover_url=data.get('cover_url', ''),
+        description=data.get('description', ''),
+        tags=data.get('tags', ''),
+        added_by=request.current_user.id,
+        status='pending' if request.current_user.role != 'admin' else 'approved'
+    )
+    db.session.add(book)
+    db.session.commit()
+    return jsonify({'message': '书目已提交', 'id': book.id}), 201
+
+@book_bp.route('/api/books/<int:book_id>', methods=['GET'])
+def get_book(book_id):
+    book = Book.query.get_or_404(book_id)
+    return jsonify({
+        'id': book.id, 'title': book.title, 'author': book.author,
+        'publisher': book.publisher, 'year': book.year, 'isbn': book.isbn,
+        'cover_url': book.cover_url, 'description': book.description,
+        'tags': book.tags, 'status': book.status
+    }), 200
+
+@book_bp.route('/api/books/<int:book_id>/approve', methods=['POST'])
+@require_admin
+def approve_book(book_id):
+    book = Book.query.get_or_404(book_id)
+    book.status = 'approved'
+    db.session.commit()
+    return jsonify({'message': '审核通过'}), 200
+```
+
+## 4.7 帖子与评论模块
+
+**app/routes/posts.py**
+```python
+from flask import Blueprint, request, jsonify
+from app import db
+from app.models import Post, Comment, Notification
+from app.utils.auth_middleware import require_login
+
+post_bp = Blueprint('post', __name__)
+
+@post_bp.route('/api/posts', methods=['GET'])
+def list_posts():
+    posts = Post.query.filter_by(status='normal').order_by(
+        Post.is_top.desc(), Post.created_at.desc()).all()
+    return jsonify([{
+        'id': p.id, 'title': p.title, 'content': p.content[:200],
+        'username': p.user.username, 'is_top': p.is_top,
+        'is_essence': p.is_essence,
+        'created_at': p.created_at.isoformat(),
+        'comment_count': len(p.comments)
+    } for p in posts]), 200
+
+@post_bp.route('/api/posts', methods=['POST'])
+@require_login
+def create_post():
+    data = request.get_json()
+    post = Post(
+        user_id=request.current_user.id,
+        title=data['title'],
+        content=data['content'],
+        book_id=data.get('book_id'),
+        event_id=data.get('event_id')
+    )
+    db.session.add(post)
+    db.session.commit()
+    return jsonify({'message': '发帖成功', 'id': post.id}), 201
+
+@post_bp.route('/api/posts/<int:post_id>', methods=['GET'])
+def get_post(post_id):
+    post = Post.query.get_or_404(post_id)
+    return jsonify({
+        'id': post.id, 'title': post.title, 'content': post.content,
+        'username': post.user.username, 'created_at': post.created_at.isoformat(),
+        'comments': [{
+            'id': c.id, 'content': c.content,
+            'username': c.user.username, 'created_at': c.created_at.isoformat()
+        } for c in post.comments]
+    }), 200
+
+@post_bp.route('/api/posts/<int:post_id>/comments', methods=['POST'])
+@require_login
+def add_comment(post_id):
+    data = request.get_json()
+    post = Post.query.get_or_404(post_id)
+    comment = Comment(
+        post_id=post_id,
+        user_id=request.current_user.id,
+        content=data['content']
+    )
+    db.session.add(comment)
+
+    # 给发帖人创建通知（自己评论自己不通知）
+    if post.user_id != request.current_user.id:
+        notification = Notification(
+            user_id=post.user_id,
+            type='comment',
+            content=f'{request.current_user.username} 评论了你的帖子《{post.title}》'
+        )
+        db.session.add(notification)
+
+    db.session.commit()
+    return jsonify({'message': '评论成功', 'id': comment.id}), 201
+```
+
+## 4.8 动态模块
+
+**app/routes/news.py**
+```python
+from flask import Blueprint, request, jsonify
+from app import db
+from app.models import News
+from app.utils.auth_middleware import require_admin
+
+news_bp = Blueprint('news', __name__)
+
+@news_bp.route('/api/news', methods=['GET'])
+def list_news():
+    news_list = News.query.order_by(News.is_top.desc(), News.published_at.desc()).all()
+    return jsonify([{
+        'id': n.id, 'title': n.title, 'content': n.content,
+        'cover_url': n.cover_url, 'is_top': n.is_top,
+        'published_at': n.published_at.isoformat()
+    } for n in news_list]), 200
+
+@news_bp.route('/api/news', methods=['POST'])
+@require_admin
+def create_news():
+    data = request.get_json()
+    news = News(
+        title=data['title'],
+        content=data['content'],
+        cover_url=data.get('cover_url', ''),
+        is_top=data.get('is_top', False),
+        author_id=request.current_user.id
+    )
+    db.session.add(news)
+    db.session.commit()
+    return jsonify({'message': '发布成功', 'id': news.id}), 201
+```
+
+## 4.9 数据库迁移
+
+引入 Flask-Migrate 后，每次模型变更都通过迁移管理：
+
+```bash
+flask db init       # 首次初始化
+flask db migrate -m "添加活动人数上限字段"
+flask db upgrade    # 应用迁移
+```
+
+## 4.10 初始化管理员账号
+
+**init_admin.py**
+```python
+from app import create_app, db, bcrypt
+from app.models import User
+
+app = create_app()
+with app.app_context():
+    db.create_all()
+    if not User.query.filter_by(username='admin').first():
+        admin = User(
+            username='admin',
+            email='admin@example.com',
+            password_hash=bcrypt.generate_password_hash('admin123').decode('utf-8'),
+            role='admin'
+        )
+        db.session.add(admin)
+        db.session.commit()
+        print('管理员创建成功')
+```
+
+## 4.11 后端测试
+
+```bash
+python run.py
+```
+
+使用 curl 或 Postman 测试：
+
+```bash
+# 注册
+curl -X POST http://localhost:5000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"test","email":"test@example.com","password":"123456"}'
+
+# 登录
+curl -X POST http://localhost:5000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"test","password":"123456"}'
+
+# 获取当前用户
+curl http://localhost:5000/api/auth/me \
+  -H "Authorization: Bearer TOKEN"
+```
+
+**测试要点：**
+- 重复注册返回 409
+- 错误密码返回 401
+- 无 Token 访问受保护接口返回 401
+- 普通用户访问管理员接口返回 403
+- 重复签到返回 409
+- 报名满员返回 400
+
+
+# 第五部分：前端开发
+
+## 5.1 初始化 Vue 项目
+
+```bash
+cd frontend
+npm create vite@latest . -- --template vue
+npm install
+npm install vue-router pinia axios element-plus
+```
+
+**vite.config.js**
+```javascript
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+
+export default defineConfig({
+  plugins: [vue()],
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:5000',
+        changeOrigin: true
+      }
+    }
+  }
+})
+```
+
+## 5.2 Axios 封装
+
+**src/api/request.js**
+```javascript
+import axios from 'axios'
+
+const request = axios.create({
+  baseURL: '/api',
+  timeout: 10000
+})
+
+request.interceptors.request.use(config => {
+  const token = localStorage.getItem('token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+request.interceptors.response.use(
+  response => response.data,
+  error => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem('token')
+      window.location.href = '/login'
+    }
+    return Promise.reject(error)
+  }
+)
+
+export default request
+```
+
+## 5.3 状态管理
+
+**src/stores/user.js**
+```javascript
+import { defineStore } from 'pinia'
+import request from '@/api/request'
+
+export const useUserStore = defineStore('user', {
+  state: () => ({
+    token: localStorage.getItem('token') || '',
+    userInfo: null
+  }),
+  actions: {
+    async login(username, password) {
+      const res = await request.post('/auth/login', { username, password })
+      this.token = res.token
+      this.userInfo = res.user
+      localStorage.setItem('token', res.token)
+    },
+    async fetchUserInfo() {
+      this.userInfo = await request.get('/auth/me')
+    },
+    logout() {
+      this.token = ''
+      this.userInfo = null
+      localStorage.removeItem('token')
+    }
+  }
+})
+```
+
+## 5.4 路由配置
+
+**src/router/index.js**
+```javascript
+import { createRouter, createWebHistory } from 'vue-router'
+import { useUserStore } from '@/stores/user'
+
+const routes = [
+  { path: '/', component: () => import('@/views/Home.vue') },
+  { path: '/login', component: () => import('@/views/Login.vue') },
+  { path: '/register', component: () => import('@/views/Register.vue') },
+  { path: '/events', component: () => import('@/views/EventList.vue') },
+  { path: '/events/:id', component: () => import('@/views/EventDetail.vue') },
+  { path: '/books', component: () => import('@/views/BookList.vue') },
+  { path: '/books/:id', component: () => import('@/views/BookDetail.vue') },
+  { path: '/forum', component: () => import('@/views/Forum.vue') },
+  { path: '/forum/:id', component: () => import('@/views/PostDetail.vue') },
+  { path: '/me', component: () => import('@/views/Profile.vue'), meta: { requiresAuth: true } },
+  { path: '/admin', component: () => import('@/views/Admin.vue'), meta: { requiresAuth: true, requiresAdmin: true } }
+]
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes
+})
+
+router.beforeEach((to, from, next) => {
+  const userStore = useUserStore()
+  if (to.meta.requiresAuth && !userStore.token) {
+    next('/login')
+  } else if (to.meta.requiresAdmin && userStore.userInfo?.role !== 'admin') {
+    next('/')
+  } else {
+    next()
+  }
+})
+
+export default router
+```
+
+## 5.5 页面开发
+
+### 登录页
+
+```vue
+<template>
+  <el-form @submit.prevent="handleLogin">
+    <el-form-item label="用户名">
+      <el-input v-model="username" />
+    </el-form-item>
+    <el-form-item label="密码">
+      <el-input v-model="password" type="password" />
+    </el-form-item>
+    <el-button type="primary" @click="handleLogin">登录</el-button>
+  </el-form>
+</template>
+
+<script setup>
+import { ref } from 'vue'
+import { useUserStore } from '@/stores/user'
+import { useRouter } from 'vue-router'
+
+const username = ref('')
+const password = ref('')
+const userStore = useUserStore()
+const router = useRouter()
+
+const handleLogin = async () => {
+  try {
+    await userStore.login(username.value, password.value)
+    await userStore.fetchUserInfo()
+    router.push('/')
+  } catch (e) {
+    alert(e.response?.data?.error || '登录失败')
+  }
+}
+</script>
+```
+
+### 活动详情页签到逻辑
+
+```javascript
+const checkin = async () => {
+  try {
+    await request.post(`/events/${eventId}/checkin`)
+    ElMessage.success('签到成功')
+    fetchEvent()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '签到失败')
+  }
+}
+```
+
+**签到按钮状态逻辑：**
+- 未登录 → 显示“请先登录”
+- 已登录 + 未签到 + 在时间窗内 + 未满员 → 显示“签到”按钮
+- 已登录 + 已签到 → 显示“已签到”（灰色禁用）
+- 已登录 + 不在时间窗内 → 显示“签到未开始/已结束”
+- 已登录 + 满员 → 显示“报名已满”
+
+### 其他页面
+
+- **首页**：动态轮播 + 活动卡片 + 书目推荐 + 最新帖子
+- **书目库**：搜索框 + 标签筛选 + 卡片列表
+- **论坛**：帖子列表 + 发帖按钮 + 评论区
+- **个人中心**：我的签到 + 我的帖子 + 我推荐的书
+- **管理后台**：活动管理 + 书目审核 + 动态发布
+
+
+# 第六部分：Thincoder 使用策略
+
+## 6.1 安装与配置
+
+```bash
+npm install -g thincoder
+thincoder
+```
+
+首次启动选择模型提供商（推荐 DeepSeek V4-Flash），输入 API Key，开启检查点回滚。
+
+## 6.2 分模块生成策略
+
+**不要一次性丢全部需求**，每次只给一个模块的提示词。
+
+**后端提示词模板：**
+> “用 Flask + Flask-SQLAlchemy 实现【模块名】的 API。数据库模型：【粘贴模型代码】。需要的接口：- GET /api/xxx（功能，权限）；- POST /api/xxx（功能，权限）。请包含数据校验和错误处理。”
+
+**前端提示词模板：**
+> “用 Vue3 + Element Plus 实现【页面名】。页面功能：【描述】。调用的 API：【列出】。请使用组合式 API，包含加载状态和错误提示。”
+
+## 6.3 检查点回滚
+
+Thincoder 每次生成前自动创建检查点，不满意可一键回滚：
+> “回滚到上一个检查点。”
+
+## 6.4 代码库理解
+
+在项目根目录运行后，可直接提问：
+> “用户签到后，前端是怎么更新的？请追踪从点击按钮到页面刷新的完整调用链。”
+
+
+# 第七部分：AI 持续更新工作流
+
+网站搭建好后，后续加功能、改 UI、修 bug 都可以交给 AI。核心原则是：**Git 管版本、AI 先读代码、先方案后修改、小步测试、及时提交。**
+
+## 7.1 更新前准备
+
+### 纳入 Git 版本控制
+
+```bash
+cd history-reading-club
+git init
+git add .
+git commit -m "初始版本：历史学读书会网站"
+```
+
+每次更新建分支：
+
+```bash
+git checkout -b feature/活动报名人数上限
+```
+
+改坏了可一键回滚：
+
+```bash
+git checkout .
+# 或
+git reset --hard HEAD
+```
+
+### 写好项目说明文档
+
+在 `README.md` 中写清楚：
+- 技术栈：Flask + Vue3 + SQLite
+- 目录结构：backend 后端，frontend 前端
+- 启动方式：`python run.py` 和 `npm run dev`
+- 数据库模型：用户、活动、签到、书目、帖子、动态、通知
+- 已实现功能清单
+
+这份文档是给 AI 看的“项目地图”。
+
+## 7.2 让 AI 理解现有项目
+
+**方式 A：用 Thincoder（推荐）**
+
+```bash
+cd history-reading-club
+thincoder
+```
+
+输入：
+> “请先扫描当前项目，告诉我：1. 技术栈；2. 目录结构；3. 已实现的功能模块；4. 数据库有哪些表。不要修改任何代码。”
+
+确认它理解正确后再提更新需求。
+
+**方式 B：用 DeepSeek 网页版**
+
+把 `README.md`、`models.py`、`__init__.py`、`router/index.js` 和要修改的文件贴给 DeepSeek：
+> “这是我的历史学读书会网站，Flask + Vue3。请先阅读代码，总结现有功能，然后等我提更新需求。”
+
+## 7.3 标准更新流程
+
+### 第 1 步：明确需求
+
+**差的需求**：“优化一下活动页面。”
+**好的需求**：“在活动详情页增加‘报名人数上限’字段，管理员创建活动时可填写，成员签到前检查是否已满，满了显示‘报名已满’。”
+
+### 第 2 步：让 AI 先给方案
+
+> “当前项目是 Flask + Vue3 的历史学读书会网站。我要添加‘活动报名人数上限’功能。请先阅读相关代码，列出：
+> 1. 需要修改的文件；
+> 2. 数据库变更；
+> 3. 后端接口变化；
+> 4. 前端页面变化；
+> 5. 可能影响的现有功能。
+> 先不要改代码，等我确认方案。”
+
+AI 可能回复：
+- `Event` 模型加 `max_participants` 字段
+- 签到接口增加人数检查
+- 活动创建表单加输入框
+- 活动详情页显示“已报名 / 上限”
+
+确认后再动手。
+
+### 第 3 步：分步修改
+
+**先改后端：**
+> “先修改后端：在 `models.py` 的 Event 模型加 `max_participants` 字段；在 `routes/events.py` 的签到接口里加人数检查。改完后告诉我改了哪些文件。”
+
+本地启动测试：
+```bash
+cd backend
+python run.py
+```
+
+用 Postman 测签到接口，确认满员返回错误。
+
+**再改前端：**
+> “现在修改前端：在活动创建表单加‘人数上限’输入框；在活动详情页显示报名人数和上限；签到按钮在满员时禁用。”
+
+### 第 4 步：数据库变更用 Flask-Migrate
+
+```bash
+flask db migrate -m "添加活动人数上限"
+flask db upgrade
+```
+
+可以让 AI 生成迁移命令：
+> “项目使用 Flask-Migrate。我刚在 Event 模型加了 `max_participants` 字段，请生成迁移命令和可能需要的修改。”
+
+开发阶段也可删掉 `reading_club.db` 重新 `db.create_all()`，但生产环境必须用迁移。
+
+### 第 5 步：本地测试
+
+- 后端：Postman 或 curl 测接口
+- 前端：`npm run dev`，手动点相关页面
+- 边界：满员、重复签到、无权限、空数据
+- 让 AI 写测试：
+> “为签到人数上限功能写一个 pytest 测试，覆盖未满、已满、重复签到三种情况。”
+
+### 第 6 步：审查修改
+
+重点检查：
+- 权限逻辑有没有被绕过
+- 数据库查询有没有 SQL 注入风险
+- 前端 XSS 过滤有没有失效
+- 有没有删除不该删的代码
+
+```bash
+git diff
+```
+
+确认后提交：
+```bash
+git add .
+git commit -m "添加活动报名人数上限功能"
+```
+
+### 第 7 步：更新文档
+
+> “把这次新增的‘活动人数上限’功能更新到 README 的功能清单里，并在 CHANGELOG 加一条记录。”
+
+## 7.4 常见更新类型与提示词
+
+**加新功能：**
+> “在现有读书会网站上加一个‘书评评分’功能：成员可以给已入库的书打 1-5 星，每本书显示平均分。请先给方案。”
+
+**改 UI：**
+> “把活动列表页的卡片布局改成两列网格，移动端一列。使用 Element Plus 的 el-row 和 el-col。”
+
+**修 Bug：**
+> “签到接口在活动状态为 draft 时也会成功，这是 bug。请修复：只有 published 和 checkin 状态才能签到。先告诉我改哪里。”
+
+**重构：**
+> “把 `routes/events.py` 里的签到逻辑抽到 `services/checkin_service.py`，保持接口不变。请给出重构方案。”
+
+**加通知：**
+> “当用户发帖被评论时，给发帖人创建一条站内通知。需要新建 notifications 表，并在评论接口里触发。”
+
+## 7.5 更新工作流清单
+
+```
+1. 拉最新代码，建分支
+   git checkout main && git pull
+   git checkout -b feature/xxx
+
+2. 让 AI 读代码，给方案
+   “先阅读项目，列出修改计划，不要改代码”
+
+3. 确认方案，分步修改
+   后端 → 测试 → 前端 → 测试
+
+4. 数据库变更用 Flask-Migrate
+   flask db migrate && flask db upgrade
+
+5. 本地全面测试
+   接口测试 + 页面手动测试 + 边界情况
+
+6. 审查 diff
+   git diff
+
+7. 提交合并
+   git add . && git commit -m "xxx"
+   git checkout main && git merge feature/xxx
+
+8. 更新文档
+   README + CHANGELOG
+```
+
+## 7.6 注意事项
+
+- **不要直接让 AI 改生产数据库**，先在本地或测试环境验证。
+- **每次只改一个功能**，改完测试再改下一个。
+- **AI 生成的代码必须审查**，尤其是权限、SQL、用户输入处理。
+- **保留旧版本**，Git 提交历史就是你的后悔药。
+- **让 AI 写测试**，测试是防止更新引入 bug 的最好手段。
+- **复杂功能先让 AI 出方案**，不要直接说“给我代码”。
+
+
+# 第八部分：开发排期建议
+
+| 天数 | 任务 |
+|---|---|
+| 第1天 | 环境准备、项目骨架、数据库模型 |
+| 第2天 | 后端认证、权限装饰器 |
+| 第3天 | 后端活动签到、书目 |
+| 第4天 | 后端帖子评论、动态、通知 |
+| 第5天 | 前端登录注册、首页 |
+| 第6天 | 前端活动、书目页面 |
+| 第7天 | 前端论坛、个人中心、管理后台 |
+| 第8天 | 联调、测试、修复 |
+| 后续 | 用 AI 按第七部分流程持续迭代 |
+
+
+# 第九部分：常见问题
+
+| 问题 | 原因 | 解决 |
+|---|---|---|
+| 前端请求 404 | 代理未配置 | 检查 vite.config.js |
+| 401 未登录 | Token 未携带 | 检查 Axios 拦截器 |
+| 403 无权限 | 角色不对 | 检查 JWT 中的 role |
+| 重复签到 | 唯一约束 | 已处理，返回 409 |
+| 数据库表未创建 | 未运行 create_all | 运行 run.py |
+| 跨域错误 | CORS 未配置 | 已配置 Flask-CORS |
+| 迁移冲突 | 模型与数据库不一致 | flask db migrate + upgrade |
+| AI 改乱代码 | 未建分支 | git checkout . 回滚 |
+
+
+# 总结
+
+整个项目从零到持续迭代，分为九个部分：
+
+1. **需求分析**：明确功能和页面
+2. **技术架构**：Flask + Vue3 + SQLite
+3. **数据模型**：七张核心表 + 通知表
+4. **后端开发**：认证、活动签到、书目、帖子、动态
+5. **前端开发**：登录、首页、活动、书目、论坛、后台
+6. **Thincoder 策略**：分模块生成、检查点回滚
+7. **AI 持续更新**：Git 管版本、先方案后修改、小步测试
+8. **开发排期**：8 天完成 MVP
+9. **常见问题**：排查与解决
+
+先按第三到第五部分完成网站搭建，再用第七部分的流程持续迭代。每次更新都遵循“读代码 → 出方案 → 分步改 → 测试 → 提交”的循环，配合 Git 版本管理，就能安全、高效地用 AI 维护和扩展你的历史学读书会网站。

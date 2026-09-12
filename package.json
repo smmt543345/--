@@ -1,0 +1,35 @@
+{
+  "name": "pocket-library",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "掌上图书馆 — 本地优先的私人藏书管理工具",
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview",
+    "serve:web": "node scripts/serve.mjs",
+    "build:web": "node scripts/build.mjs web",
+    "build:tauri": "node scripts/build.mjs tauri",
+    "build:android": "node scripts/build.mjs android",
+    "test": "node --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dexie": "^4.0.11",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-router-dom": "^7.18.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "fake-indexeddb": "^6.0.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.7.2",
+    "vite": "^8.3.0"
+  }
+}

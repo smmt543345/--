@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="本地优先的私人藏书管理工具" />
+    <meta name="theme-color" content="#2563eb" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="掌上图书馆" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icons/icon-192.png" type="image/png" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+    <title>掌上图书馆</title>
+    <style>
+      /* React 挂载前的最小样式：避免脚本加载期间白屏 */
+      html,
+      body {
+        margin: 0;
+      }
+      #root {
+        min-height: 100vh;
+      }
+      .boot {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 60vh;
+        font-family: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+        color: #6b7280;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"><div class="boot">正在打开书库…</div></div>
+    <noscript>本应用需要开启 JavaScript 才能运行。</noscript>
+    <script type="module" src="/src/app/main.tsx"></script>
+  </body>
+</html>
