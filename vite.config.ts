@@ -4,10 +4,10 @@ import tailwindcss from '@tailwindcss/vite';
 
 /**
  * 构建分流（01 §4）：
- *   web（默认） → PWA 启用、base = /新作/（GitHub Pages：SMMT543345/新作，Q3 已定）
+ *   web（默认） → PWA 启用、base = /--/（GitHub Pages：SMMT543345/--，Q3 已定）
  *   tauri       → PWA 关闭、base = /
  *   android     → PWA 关闭、base = /
- * 开发服务器一律用 base = '/'，否则本地要访问 /新作/ 才能打开。
+ * 开发服务器一律用 base = '/'，否则本地要访问 /--/ 才能打开。
  *
  * PWA 插件属阶段 F，此处只留分支位置。
  */
@@ -15,8 +15,8 @@ import tailwindcss from '@tailwindcss/vite';
 type BuildTarget = 'web' | 'tauri' | 'android';
 
 const BASE_BY_TARGET: Record<BuildTarget, string> = {
-  // Q3 已定：GitHub Pages 仓库 SMMT543345/新作 → 站点路径 /新作/
-  web: '/新作/',
+  // Q3 已定：GitHub Pages 仓库 SMMT543345/-- → 站点路径 /--/
+  web: '/--/',
   tauri: '/',
   android: '/',
 };

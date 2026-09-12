@@ -86,7 +86,7 @@
 
 - 仓库根的 `index.html` 是 **Vite 的应用入口**，属于本项目。原先放在该路径的井字棋页面与本项目无关，已移入 `scratch/`（见 01 §9 Q1）。
 - `vite.config.ts` 按 `BUILD_TARGET` 决定 `base`（01 §4）。PWA（manifest、图标、Service Worker）已在阶段 F 接入：静态文件在 `public/`（图标由 `scripts/make-icons.mjs` 生成），SW 只在 web 构建注册。
-- **web 构建的本地预览用 `npm run serve:web`（`scripts/serve.mjs`），不要用 `vite preview`**：preview 把 dist 摊在根路径，子路径 base 下的资源/SW/manifest 全部回退成 index.html，应用跑不起来也装不上 PWA；serve.mjs 按 `/新作/*` 正确映射（与 vite.config.ts 的 web base 同步），行为与 GitHub Pages 一致。
+- **web 构建的本地预览用 `npm run serve:web`（`scripts/serve.mjs`），不要用 `vite preview`**：preview 把 dist 摊在根路径，子路径 base 下的资源/SW/manifest 全部回退成 index.html，应用跑不起来也装不上 PWA；serve.mjs 按 `/--/*` 正确映射（与 vite.config.ts 的 web base 同步），行为与 GitHub Pages 一致。
 - 脚本：`npm run dev` / `build` / `preview` / `serve:web` / `build:web` / `build:tauri` / `build:android`。
 
 ---
