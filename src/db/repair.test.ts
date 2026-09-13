@@ -261,36 +261,6 @@ describe('不变式修复通道（02 §6）', () => {
   });
 
   it('S23 孤儿封面（I10）：封面指向不存在的书目 → 删除并记警告（B4）', async () => {
-  it('S24 书目字段形状（I11）：authors 是字符串 → 收敛成数组并记警告（B6）', async () => {
-    await withDb(async (db) => {
-      const book = await createBook(db, { title: '手改坏的书' });
-      // 手改备份 / 别处写坏的库会把 authors 写成字符串，界面会在 authors.join 上直接抛错
-      await db.books.put({ ...book, authors: '某作者' as unknown as string[], tags: [1, '历史'] as unknown as string[] });
-
-      const check = await checkInvariants(db);
-      assert.equal(check.ok, false, '检查阶段就要能看出问题');
-      assert.ok(check.problems.some((p) => p.includes('I11')));
-
-      const report = await repairInvariants(db);
-      const fixed = await db.books.get(book.id);
-      assert.deepEqual(fixed?.authors, ['某作者'], '字符串收敛成单元素数组');
-      assert.deepEqual(fixed?.tags, ['历史'], '数组里的非字符串项被剔掉');
-      assert.ok(report.warnings.some((w) => w.includes('I11') || w.includes('字符串数组')));
-    });
-  });
-
-  it('I11 幂等：修正后再跑一遍，0 变更', async () => {
-    await withDb(async (db) => {
-      const book = await createBook(db, { title: '书' });
-      await db.books.put({ ...book, authors: '甲' as unknown as string[] });
-      await repairInvariants(db);
-      const second = await repairInvariants(db);
-      assert.equal(second.warnings.length, 0, '干净数据不得产生警告');
-      assert.deepEqual((await db.books.get(book.id))?.authors, ['甲']);
-    });
-  });
-
-
     await withDb(async (db) => {
       const book = await createBook(db, { title: '书' });
       await putCover(db, { bookId: book.id, blob: new Blob([new Uint8Array([1])]), mime: 'image/jpeg' });
@@ -313,6 +283,35 @@ describe('不变式修复通道（02 §6）', () => {
 
       // 数据已合规 → 再跑一次是 0 变更（导入幂等性的前提，03 §8）
       assert.equal((await repairInvariants(db)).orphanCoversDeleted, 0);
+    });
+  });
+
+  it('S24 书目字段形状（I11）：authors 是字符串 → 收敛成数组并记警告（B6）', async () => {
+    await withDb(async (db) => {
+      const book = await createBook(db, { title: '手改坏的书' });
+      // 手改备份 / 别处写坏的库会把 authors 写成字符串，界面会在 authors.join 上直接抛错
+      await db.books.put({ ...book, authors: '某作者' as unknown as string[], tags: [1, '历史'] as unknown as string[] });
+
+      const check = await checkInvariants(db);
+      assert.equal(check.ok, false, '检查阶段就要能看出问题');
+      assert.ok(check.problems.some((p) => p.includes('I11')));
+
+      const report = await repairInvariants(db);
+      const fixed = await db.books.get(book.id);
+      assert.deepEqual(fixed?.authors, ['某作者'], '字符串收敛成单元素数组');
+      assert.deepEqual(fixed?.tags, ['历史'], '数组里的非字符串项被剔掉');
+      assert.ok(report.warnings.some((w) => w.includes('I11') || w.includes('字符串数组')));
+    });
+  });
+
+  it('S25 I11 幂等：修正后再跑一遍，0 变更', async () => {
+    await withDb(async (db) => {
+      const book = await createBook(db, { title: '书' });
+      await db.books.put({ ...book, authors: '甲' as unknown as string[] });
+      await repairInvariants(db);
+      const second = await repairInvariants(db);
+      assert.equal(second.warnings.length, 0, '干净数据不得产生警告');
+      assert.deepEqual((await db.books.get(book.id))?.authors, ['甲']);
     });
   });
 });
