@@ -13,8 +13,10 @@ import { Link, useNavigate } from 'react-router-dom';
 
 import { useBootInfo } from '../../app/boot-context.ts';
 import { useDb } from '../../app/db-context.ts';
+import { EmptyShelfArt } from '../../app/illustrations.tsx';
 import { bookDisplayTitle, copyStatusTone, describeLastExport, authorsText } from '../../app/labels.ts';
-import { Badge, Banner, Button, Card, EmptyState, PageHeader, Spinner, StatTile, cn } from '../../app/ui.tsx';
+import { SkeletonBlock, SkeletonList } from '../../app/Skeleton.tsx';
+import { Badge, Banner, Button, Card, EmptyState, PageHeader, StatTile, cn } from '../../app/ui.tsx';
 import { useLiveQuery } from '../../app/useLiveQuery.ts';
 import { listOverdueLoans } from '../../db/loans.ts';
 import { listRecentBooks } from '../../db/listing.ts';
@@ -115,9 +117,18 @@ export function OverviewPage(): ReactNode {
       )}
 
       {snapshot === null ? (
-        <Spinner label="正在统计藏书…" />
+        // 首屏骨架（04 §11.9 第 3 条）：统计格子 + 两行列表占位，真实内容就地填上，不整块跳一下
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" aria-hidden="true">
+            {Array.from({ length: 6 }, (_, index) => (
+              <SkeletonBlock key={index} className="h-16" />
+            ))}
+          </div>
+          <SkeletonList rows={2} label="正在统计藏书…" />
+        </div>
       ) : snapshot.stats.books === 0 && snapshot.stats.copies === 0 ? (
         <EmptyState
+          illustration={<EmptyShelfArt />}
           title="还没有书"
           hint="点右上角的「＋ 新增书目」记下第一本。先写书名就行，作者、ISBN 以后可以慢慢补。"
           action={
@@ -171,8 +182,8 @@ function OverviewContent({
         ) : (
           <ul className="space-y-2">
             {overdue.map((loan) => (
-              <li key={loan.id}>
-                <Card>
+              <li key={loan.id} className="animate-fade-rise">
+                <Card interactive>
                   <Link
                     to={`/books/${loan.book.id}`}
                     className="flex min-h-11 items-start justify-between gap-3 p-3 hover:bg-neutral-50 dark:hover:bg-neutral-800/60"
@@ -203,8 +214,8 @@ function OverviewContent({
           <h2 className="mb-2 text-sm font-medium text-neutral-700 dark:text-neutral-300">最近添加</h2>
           <ul className="space-y-2">
             {recent.map(({ book, copies }) => (
-              <li key={book.id}>
-                <Card>
+              <li key={book.id} className="animate-fade-rise">
+                <Card interactive>
                   <Link
                     to={`/books/${book.id}`}
                     className="flex min-h-11 items-center justify-between gap-3 p-3 hover:bg-neutral-50 dark:hover:bg-neutral-800/60"

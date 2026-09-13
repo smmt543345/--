@@ -8,8 +8,10 @@
 import { useState, type ReactNode } from 'react';
 
 import { useDb } from '../../app/db-context.ts';
+import { NoSnapshotsArt } from '../../app/illustrations.tsx';
 import { formatDateTime, snapshotCountsText } from '../../app/labels.ts';
-import { Badge, Button, Card, ConfirmDialog, EmptyState, InlineError, Spinner } from '../../app/ui.tsx';
+import { Badge, Button, Card, ConfirmDialog, EmptyState, InlineError } from '../../app/ui.tsx';
+import { SkeletonBlock } from '../../app/Skeleton.tsx';
 import { useAsyncAction, useLiveQuery } from '../../app/useLiveQuery.ts';
 import { SETTING_KEYS, getSetting } from '../../db/settings.ts';
 import { listSnapshots, restoreSnapshot } from '../../db/snapshots.ts';
@@ -42,7 +44,15 @@ export function SnapshotSection(): ReactNode {
     return (
       <Card className="space-y-3 p-4">
         <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">快照</h2>
-        <Spinner label="正在读取快照…" />
+        <div className="space-y-2" role="status" aria-busy="true" aria-live="polite">
+          <span className="sr-only">正在读取快照…</span>
+          {Array.from({ length: 3 }, (_, index) => (
+            <div key={index} className="flex items-center justify-between gap-3 rounded-lg border border-neutral-200 p-2 dark:border-neutral-800">
+              <SkeletonBlock className="h-4 w-40" />
+              <SkeletonBlock className="h-6 w-16 rounded-full" />
+            </div>
+          ))}
+        </div>
       </Card>
     );
   }
@@ -58,13 +68,15 @@ export function SnapshotSection(): ReactNode {
       </p>
 
       {data.snapshots.length === 0 ? (
-        <EmptyState title="还没有快照" hint="改动的次数攒够、且距上次超过一天后，这里会自动出现第一张。" />
+        <EmptyState
+          illustration={<NoSnapshotsArt />}
+          title="还没有快照" hint="改动的次数攒够、且距上次超过一天后，这里会自动出现第一张。" />
       ) : (
         <ul className="space-y-2">
           {data.snapshots.map((snap) => (
             <li
               key={snap.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-200 px-3 py-2 dark:border-neutral-800"
+              className="flex animate-fade-rise flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-200 px-3 py-2 dark:border-neutral-800"
             >
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">

@@ -13,6 +13,7 @@ import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { useDb } from '../../app/db-context.ts';
+import { NoLoansArt } from '../../app/illustrations.tsx';
 import { authorsText, bookDisplayTitle, LOAN_STATUS_LABELS } from '../../app/labels.ts';
 import {
   Badge,
@@ -23,11 +24,11 @@ import {
   EmptyState,
   InlineError,
   PageHeader,
-  Spinner,
   StatTile,
   TextField,
   cn,
 } from '../../app/ui.tsx';
+import { SkeletonBlock, SkeletonList } from '../../app/Skeleton.tsx';
 import { useAsyncAction, useLiveQuery } from '../../app/useLiveQuery.ts';
 import { attachLoanDetails, listActiveLoans, listLoanHistory, listOverdueLoans } from '../../db/loans.ts';
 import { daysSince, isOverdue, today } from '../../domain/time.ts';
@@ -86,7 +87,26 @@ export function LoansPage(): ReactNode {
 
   // 首次查询结果到达前不画空态：否则会先闪一下"还没有借出记录"，看起来像丢数据
   if (active === null || overdue === null || history === null) {
-    return <Spinner label="正在翻借出记录…" />;
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          title="借出"
+          description="谁借走了、什么时候该还，都记在这里。"
+          actions={
+            <Button variant="primary" onClick={() => setLendOpen(true)}>
+              ＋ 快速借出
+            </Button>
+          }
+        />
+        <section className="space-y-3">
+          <div className="grid grid-cols-2 gap-2">
+            <SkeletonBlock className="h-20 rounded-xl" />
+            <SkeletonBlock className="h-20 rounded-xl" />
+          </div>
+          <SkeletonList rows={3} label="正在翻借出记录…" />
+        </section>
+      </div>
+    );
   }
 
   const maxOverdueDays = overdue.reduce((max, loan) => Math.max(max, daysSince(loan.dueDate)), 0);
@@ -129,6 +149,7 @@ export function LoansPage(): ReactNode {
 
       {nothingAtAll ? (
         <EmptyState
+          illustration={<NoLoansArt />}
           title="还没有借出记录"
           hint="点右上角「＋ 快速借出」，或者去书目详情页把某本副本借出去，这里就会记下来。"
           action={
@@ -168,7 +189,8 @@ export function LoansPage(): ReactNode {
                 return (
                   <Card
                     key={loan.id}
-                    className={cn('p-3', overdueDays > 0 && 'border-amber-300 dark:border-amber-800')}
+                    interactive
+                    className={cn('animate-fade-rise p-3', overdueDays > 0 && 'border-amber-300 dark:border-amber-800')}
                   >
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
@@ -211,7 +233,7 @@ export function LoansPage(): ReactNode {
             ) : (
               <>
                 {visibleHistory.map((loan) => (
-                  <Card key={loan.id} className="p-3">
+                  <Card key={loan.id} interactive className="animate-fade-rise p-3">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
                       <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
                         {bookDisplayTitle(loan.book)}

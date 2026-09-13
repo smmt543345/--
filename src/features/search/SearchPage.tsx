@@ -14,6 +14,7 @@ import { Link, useNavigate } from 'react-router-dom';
 
 import { useDb } from '../../app/db-context.ts';
 import { useDebounced } from '../../app/hooks.ts';
+import { EmptyShelfArt, NoResultsArt } from '../../app/illustrations.tsx';
 import {
   COPY_STATUS_LABELS,
   MATCH_FIELD_LABELS,
@@ -21,6 +22,7 @@ import {
   bookDisplayTitle,
   copyStatusTone,
 } from '../../app/labels.ts';
+import { SkeletonList } from '../../app/Skeleton.tsx';
 import {
   Badge,
   Button,
@@ -29,7 +31,6 @@ import {
   EmptyState,
   PageHeader,
   SelectField,
-  Spinner,
   TextField,
   type ChoiceOption,
   type SelectOption,
@@ -79,7 +80,7 @@ function ResultRow({ result }: { result: BookSearchResult }): ReactNode {
   const paths = locationPathsText(copies);
 
   return (
-    <Card>
+    <Card interactive>
       <Link
         to={`/books/${book.id}`}
         className="flex min-h-11 gap-3 p-3 hover:bg-neutral-50 dark:hover:bg-neutral-800/60"
@@ -236,10 +237,11 @@ export function SearchPage(): ReactNode {
       </div>
 
       {results === null ? (
-        <Spinner label="正在检索…" />
+        <SkeletonList rows={4} label="正在检索…" />
       ) : visible.length === 0 ? (
         hasFilter ? (
           <EmptyState
+            illustration={<NoResultsArt />}
             title="没找到符合条件的书"
             hint="换个关键词试试，或者放宽位置、标签与状态的筛选。刚到手还没录入的书，直接去新增一本。"
             action={
@@ -253,6 +255,7 @@ export function SearchPage(): ReactNode {
           />
         ) : (
           <EmptyState
+            illustration={<EmptyShelfArt />}
             title="书库还是空的"
             hint="还没有书可以搜。点右上角「＋ 新增书目」记下第一本，之后就能按书名、作者、ISBN 或标签把它找回来。"
             action={
@@ -272,7 +275,7 @@ export function SearchPage(): ReactNode {
           </p>
           <ul className="space-y-2">
             {visible.map((result) => (
-              <li key={result.book.id}>
+              <li key={result.book.id} className="animate-fade-rise">
                 <ResultRow result={result} />
               </li>
             ))}

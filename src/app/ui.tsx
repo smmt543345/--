@@ -78,11 +78,33 @@ export function Banner({
  * 容器
  * ------------------------------------------------------------------ */
 
-export function Card({ children, className }: { children: ReactNode; className?: string }): ReactNode {
+/**
+ * 卡片容器。
+ * `interactive` 给「整块可点」的卡片（列表行那一类）加悬停微浮起（04 §11.9 第 4 条）；
+ * 表单卡、区块容器这类静态卡片不浮起 —— 鼠标扫过一整块版面就抖一下是噪声，不是精致。
+ * 过渡写在基类里：静态卡片不该因为 hover 才拥有过渡，浮起时也不该是硬跳。
+ * 两个坑写在这里，免得下次又被踩：
+ * - Tailwind v4 的 `-translate-y-*` 写的是独立属性 `translate`（不是 `transform`），
+ *   光写 `transition-[transform,…]` 的话浮起会是硬跳 —— 必须把它列进去。
+ * - `@layer base` 里给 `body *` 定的「主题切换时背景/边框色平滑过渡」会被这里的
+ *   工具类盖掉（util 层高于 base 层），所以 `background-color`、`border-color` 也得列进去，
+ *   否则深浅色切换时卡片会硬跳。
+ */
+export function Card({
+  children,
+  className,
+  interactive = false,
+}: {
+  children: ReactNode;
+  className?: string;
+  interactive?: boolean;
+}): ReactNode {
   return (
     <div
       className={cn(
-        'rounded-xl border border-neutral-200/80 bg-white shadow-sm shadow-neutral-950/[0.03] dark:border-neutral-800/80 dark:bg-neutral-900 dark:shadow-black/20',
+        'rounded-xl border border-neutral-200/80 bg-white shadow-sm shadow-neutral-950/[0.03] transition-[background-color,border-color,transform,translate,box-shadow] duration-150 dark:border-neutral-800/80 dark:bg-neutral-900 dark:shadow-black/20',
+        interactive &&
+          'hover:-translate-y-0.5 hover:shadow-md hover:shadow-neutral-950/[0.09] dark:hover:shadow-black/50',
         className,
       )}
     >
@@ -91,21 +113,48 @@ export function Card({ children, className }: { children: ReactNode; className?:
   );
 }
 
+/* ------------------------------------------------------------------ *
+ * 封面框（04 §11.9 第 1 条）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 封面与缩略图共用的边色令牌：浅色模式浅灰边、深色模式亮边。
+ * 详情页大图（3:4）与列表缩略图（40px）必须读同一份 —— 各写一份迟早会漂开。
+ */
+export const COVER_EDGE_CLASS = 'border border-neutral-200 dark:border-neutral-700';
+
+/** 封面框的柔和阴影（同一套）。40px 的小图不用它：那么小的面积上阴影只是脏。 */
+export const COVER_SHADOW_CLASS = 'shadow-sm shadow-neutral-950/[0.06] dark:shadow-black/40';
+
 export function PageHeader({ title, description, actions }: { title: string; description?: ReactNode; actions?: ReactNode }): ReactNode {
   return (
     <header className="mb-4 flex flex-wrap items-end justify-between gap-3">
       <div className="min-w-0">
-        <h1 className="text-xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">{title}</h1>
-        {description !== undefined && <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">{description}</p>}
+        <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">{title}</h1>
+        {/* 标题下的短朱线：全书统一的「标目」记号（04 §11.11） */}
+        <span aria-hidden="true" className="mt-1.5 block h-[2px] w-8 rounded-full bg-red-600/85 dark:bg-red-500/85" />
+        {description !== undefined && <p className="mt-1.5 text-sm text-neutral-500 dark:text-neutral-400">{description}</p>}
       </div>
       {actions !== undefined && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </header>
   );
 }
 
-export function EmptyState({ title, hint, action }: { title: string; hint?: ReactNode; action?: ReactNode }): ReactNode {
+export function EmptyState({
+  title,
+  hint,
+  action,
+  illustration,
+}: {
+  title: string;
+  hint?: ReactNode;
+  action?: ReactNode;
+  /** 插画（04 §11.9 第 2 条）：**不传 = 与从前完全一样**，既有调用零影响 */
+  illustration?: ReactNode;
+}): ReactNode {
   return (
     <div className="rounded-xl border border-dashed border-neutral-300 px-4 py-10 text-center dark:border-neutral-700">
+      {illustration !== undefined && <div className="mb-3 flex justify-center">{illustration}</div>}
       <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">{title}</p>
       {hint !== undefined && <p className="mx-auto mt-2 max-w-md text-sm text-neutral-500 dark:text-neutral-400">{hint}</p>}
       {action !== undefined && <div className="mt-4 flex justify-center">{action}</div>}
@@ -169,7 +218,8 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const BASE_BUTTON_CLASS =
-  'inline-flex items-center justify-center gap-1.5 rounded-xl font-medium transition-[background-color,color,border-color,box-shadow,transform] duration-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60';
+  // `scale` 单列：v4 的 `active:scale-[0.98]` 写的是独立属性 `scale`，不在 `transform` 里
+  'inline-flex items-center justify-center gap-1.5 rounded-xl font-medium transition-[background-color,color,border-color,box-shadow,transform,scale] duration-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:active:scale-100';
 
 /**
  * 按钮的类名组合。导出给「长得像按钮的链接」用：<a> 里不能套 <button>，
@@ -328,7 +378,7 @@ export function ChoiceGroup<T extends string>({
               aria-pressed={active}
               onClick={() => onChange(option.value)}
               className={cn(
-                'min-h-11 rounded-lg border px-3 text-sm font-medium transition-[background-color,color,border-color,box-shadow,transform] duration-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
+                'min-h-11 rounded-lg border px-3 text-sm font-medium transition-[background-color,color,border-color,box-shadow,transform,scale] duration-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:active:scale-100',
                 active
                   ? 'border-blue-600 bg-blue-600 text-white shadow-sm shadow-blue-600/25'
                   : 'border-neutral-300 bg-white text-neutral-700 hover:border-neutral-400 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:border-neutral-600 dark:hover:bg-neutral-800',

@@ -18,6 +18,7 @@ import { useId, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 import { useDb } from '../../app/db-context.ts';
+import { NoLocationsArt } from '../../app/illustrations.tsx';
 import {
   COPY_STATUS_LABELS,
   DELETE_STRATEGY_LABELS,
@@ -25,6 +26,7 @@ import {
   bookDisplayTitle,
   copyStatusTone,
 } from '../../app/labels.ts';
+import { SkeletonBlock, SkeletonList } from '../../app/Skeleton.tsx';
 import {
   Badge,
   Button,
@@ -37,7 +39,6 @@ import {
   Modal,
   PageHeader,
   SelectField,
-  Spinner,
   TextField,
   cn,
   type ChoiceOption,
@@ -404,7 +405,7 @@ export function LocationsPage(): ReactNode {
         </div>
 
         {data === null ? (
-          <Spinner label="正在读取藏书…" />
+          <SkeletonList rows={3} label="正在读取藏书…" />
         ) : data.copies.length === 0 ? (
           <div className="mt-2">
             <EmptyState
@@ -427,7 +428,7 @@ export function LocationsPage(): ReactNode {
               if (copy.owner !== '') meta.push(`拥有者：${copy.owner}`);
               if (copy.activeLoan !== null) meta.push(`借给「${copy.activeLoan.borrower}」`);
               return (
-                <li key={copy.id}>
+                <li key={copy.id} className="animate-fade-rise">
                   <Link
                     to={`/books/${copy.bookId}`}
                     className="flex min-h-11 items-center gap-2 py-1.5 hover:bg-neutral-100 dark:hover:bg-neutral-800/60"
@@ -569,7 +570,7 @@ export function LocationsPage(): ReactNode {
             </Button>
           }
         />
-        <Spinner label="正在读取位置树…" />
+        <SkeletonBlock className="h-4 w-40" />
       </div>
     );
   }
@@ -629,6 +630,7 @@ export function LocationsPage(): ReactNode {
       {!hasUserLocations && (
         <div className="mb-4">
           <EmptyState
+            illustration={<NoLocationsArt />}
             title="还没有位置"
             hint={
               unsortedCopies > 0

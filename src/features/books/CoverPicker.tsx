@@ -15,13 +15,13 @@ import { useRef, useState, type ReactNode } from 'react';
 
 import { useObjectUrl } from '../../app/hooks.ts';
 import { COVER_LABELS, coverPhotoAlt } from '../../app/labels.ts';
-import { Button, InlineError, cn } from '../../app/ui.tsx';
+import { Button, COVER_EDGE_CLASS, COVER_SHADOW_CLASS, InlineError, cn } from '../../app/ui.tsx';
 import { compressImage, type CompressedImage } from '../../platform/image.ts';
 
-/** 画框尺寸：详情页大图 / 表单里的预览。 */
-const FRAME_SIZES = {
-  sm: 'h-28 w-20',
-  lg: 'h-36 w-24',
+/** 画框宽度：详情页大图 / 表单里的预览。高度不写死，交给 `aspect-[3/4]` 算（04 §11.9）。 */
+const FRAME_WIDTHS = {
+  sm: 'w-21',
+  lg: 'w-24',
 } as const;
 
 const FRAME_ICON_SIZES = {
@@ -29,8 +29,18 @@ const FRAME_ICON_SIZES = {
   lg: 'text-2xl',
 } as const;
 
-// 边框颜色写在这里：Tailwind v4 的 `border` 不带颜色时用 currentColor，正文色当边框太重
-const FRAME_CLASS = 'shrink-0 rounded-lg border border-neutral-200 object-cover dark:border-neutral-800';
+/**
+ * 照片框（04 §11.9 第 1 条）：固定 3:4、圆角 12px、1px 细边（浅色浅灰 / 深色亮边，
+ * 共用 `COVER_EDGE_CLASS` 一份令牌）+ 柔和阴影；`object-cover` 填满，不拉伸变形。
+ */
+const FRAME_CLASS = cn('aspect-[3/4] shrink-0 rounded-xl object-cover', COVER_EDGE_CLASS, COVER_SHADOW_CLASS);
+
+/**
+ * 没有照片时的占位框：盒子与照片框**同一套几何**（同宽、同 3:4、同 12px 圆角、同 1px 同色边），
+ * 只把边改成虚线、垫一层淡底表明"这里还空着" —— 尺寸一致，存下照片时不会跳一下。
+ */
+const PLACEHOLDER_CLASS =
+  'flex flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-neutral-300 bg-neutral-50 text-neutral-400 dark:border-neutral-700 dark:bg-neutral-950/40 dark:text-neutral-500';
 
 export interface CoverPickerProps {
   /** 这本书的书名，只用于封面图的 alt */
@@ -48,7 +58,7 @@ export interface CoverPickerProps {
   disabled?: boolean;
   /** 没有本机照片时退回显示的封面图 URL（v1 的 `Book.coverUrl` 字段） */
   fallbackUrl?: string;
-  size?: keyof typeof FRAME_SIZES;
+  size?: keyof typeof FRAME_WIDTHS;
 }
 
 export function CoverPicker({
@@ -122,21 +132,16 @@ export function CoverPicker({
       />
 
       {shownUrl !== null ? (
-        <img src={shownUrl} alt={coverPhotoAlt(title)} className={cn(FRAME_CLASS, FRAME_SIZES[size])} />
+        <img src={shownUrl} alt={coverPhotoAlt(title)} className={cn(FRAME_CLASS, FRAME_WIDTHS[size])} />
       ) : showFallback ? (
         <img
           src={fallbackUrl}
           alt={coverPhotoAlt(title)}
           onError={() => setBrokenFallback(fallbackUrl)}
-          className={cn(FRAME_CLASS, FRAME_SIZES[size])}
+          className={cn(FRAME_CLASS, FRAME_WIDTHS[size])}
         />
       ) : (
-        <div
-          className={cn(
-            FRAME_SIZES[size],
-            'flex shrink-0 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-neutral-300 text-neutral-400 dark:border-neutral-700 dark:text-neutral-500',
-          )}
-        >
+        <div className={cn('aspect-[3/4] shrink-0', FRAME_WIDTHS[size], PLACEHOLDER_CLASS)}>
           <span aria-hidden="true" className={FRAME_ICON_SIZES[size]}>
             📷
           </span>

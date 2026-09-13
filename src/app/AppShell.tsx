@@ -13,7 +13,7 @@ import { UndoBanner } from './UndoBanner.tsx';
 
 const ICON_URL = `${import.meta.env.BASE_URL}icons/icon-192.png`;
 
-/** 侧边栏项：宽屏用，带文字说明 */
+/** 侧边栏项：宽屏用，带文字说明。激活态左侧一道朱线，像书页边的朱笔标记。 */
 function SidebarLink({ to, label, hint, icon }: (typeof NAV_ITEMS)[number]): ReactNode {
   return (
     <NavLink
@@ -21,23 +21,30 @@ function SidebarLink({ to, label, hint, icon }: (typeof NAV_ITEMS)[number]): Rea
       end={to === '/'}
       className={({ isActive }) =>
         cn(
-          'flex items-start gap-3 rounded-xl px-3 py-2 text-sm transition-colors',
+          'relative flex items-start gap-3 rounded-xl px-3 py-2 text-sm transition-colors',
           isActive
-            ? 'bg-blue-600/[0.07] font-medium text-blue-700 ring-1 ring-inset ring-blue-600/10 dark:bg-blue-400/10 dark:text-blue-300 dark:ring-blue-400/20'
+            ? 'bg-blue-600/[0.08] font-medium text-blue-800 ring-1 ring-inset ring-blue-600/15 dark:bg-blue-400/10 dark:text-blue-200 dark:ring-blue-400/20'
             : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800',
         )
       }
     >
-      <span className="mt-0.5 shrink-0">{icon}</span>
-      <span className="min-w-0">
-        <span className="block">{label}</span>
-        <span className="mt-0.5 block text-xs text-neutral-400 dark:text-neutral-500">{hint}</span>
-      </span>
+      {({ isActive }) => (
+        <>
+          {isActive && (
+            <span aria-hidden="true" className="absolute top-1.5 bottom-1.5 left-0 w-[3px] rounded-full bg-red-600 dark:bg-red-500" />
+          )}
+          <span className="mt-0.5 shrink-0">{icon}</span>
+          <span className="min-w-0">
+            <span className="block">{label}</span>
+            <span className="mt-0.5 block text-xs text-neutral-400 dark:text-neutral-500">{hint}</span>
+          </span>
+        </>
+      )}
     </NavLink>
   );
 }
 
-/** 底部标签项：窄屏用，只有图标与短名 */
+/** 底部标签项：窄屏用，只有图标与短名。激活态顶部一道朱线。 */
 function TabLink({ to, label, icon }: (typeof NAV_ITEMS)[number]): ReactNode {
   return (
     <NavLink
@@ -45,13 +52,20 @@ function TabLink({ to, label, icon }: (typeof NAV_ITEMS)[number]): ReactNode {
       end={to === '/'}
       className={({ isActive }) =>
         cn(
-          'flex min-h-14 flex-1 flex-col items-center justify-center gap-1 px-1 text-[11px] transition-colors',
-          isActive ? 'text-blue-600 dark:text-blue-400' : 'text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200',
+          'relative flex min-h-14 flex-1 flex-col items-center justify-center gap-1 px-1 text-[11px] transition-colors',
+          isActive ? 'text-blue-800 dark:text-blue-200' : 'text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200',
         )
       }
     >
-      {icon}
-      <span className="truncate">{label}</span>
+      {({ isActive }) => (
+        <>
+          {isActive && (
+            <span aria-hidden="true" className="absolute inset-x-3 top-0 h-[3px] rounded-b-full bg-red-600 dark:bg-red-500" />
+          )}
+          {icon}
+          <span className="truncate">{label}</span>
+        </>
+      )}
     </NavLink>
   );
 }
@@ -63,9 +77,9 @@ export function AppShell(): ReactNode {
         {/* 宽屏侧边栏 */}
         <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-neutral-200/70 bg-white/80 px-3 py-4 sm:flex dark:border-neutral-800/70 dark:bg-neutral-900/80">
           <div className="mb-4 flex items-center gap-2.5 px-2">
-            <img src={ICON_URL} alt="" className="h-9 w-9 rounded-xl shadow-sm" />
+            <img src={ICON_URL} alt="" className="h-9 w-9 rounded-lg shadow-sm" />
             <div className="min-w-0">
-              <p className="truncate text-base font-semibold tracking-tight">掌上图书馆</p>
+              <p className="truncate text-base font-semibold">掌上图书馆</p>
               <p className="mt-0.5 truncate text-xs text-neutral-400 dark:text-neutral-500">数据只存在这台设备上</p>
             </div>
           </div>
@@ -82,7 +96,7 @@ export function AppShell(): ReactNode {
         <div className="flex min-w-0 flex-1 flex-col">
           {/* 窄屏顶栏 */}
           <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-neutral-200/70 bg-white/90 px-3 py-2 backdrop-blur sm:hidden dark:border-neutral-800/70 dark:bg-neutral-900/90">
-            <span className="flex items-center gap-2 text-sm font-semibold tracking-tight">
+            <span className="flex items-center gap-2 text-sm font-semibold">
               <img src={ICON_URL} alt="" className="h-6 w-6 rounded-md" />
               掌上图书馆
             </span>

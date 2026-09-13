@@ -25,6 +25,7 @@ import {
   formatDateTime,
   locationPathText,
 } from '../../app/labels.ts';
+import { SkeletonBlock, SkeletonList } from '../../app/Skeleton.tsx';
 import {
   Badge,
   Banner,
@@ -37,7 +38,6 @@ import {
   Modal,
   PageHeader,
   SelectField,
-  Spinner,
   TextAreaField,
   TextField,
   type ChoiceOption,
@@ -151,7 +151,7 @@ function CopyCard({
       : '丢失/卖掉后这本不再参与借出。若它正被借出，借出记录会自动结束（记为今天归还）。';
 
   return (
-    <Card className="space-y-3 p-3">
+    <Card interactive className="animate-fade-rise space-y-3 p-3">
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={copyStatusTone(copy.status)}>{COPY_STATUS_LABELS[copy.status]}</Badge>
         <Badge>{COPY_CONDITION_LABELS[copy.condition]}</Badge>
@@ -271,7 +271,28 @@ export function BookDetailPage(): ReactNode {
   const [deleteBookError, setDeleteBookError] = useState<string | null>(null);
 
   if (detail === null) {
-    return <Spinner label="正在打开这本书…" />;
+    // 首屏骨架（04 §11.9 第 3 条）：封面框（与详情页封面同一套 3:4 几何）+ 元数据行 + 副本列表占位
+    return (
+      <div className="space-y-6">
+        {/* 标题行也占位：真实页头（书名 + 作者）来得晚，先撑住高度，避免内容到位时整页往下跳 */}
+        <div className="mb-4 space-y-2">
+          <SkeletonBlock className="h-6 w-1/2" />
+          <SkeletonBlock className="h-4 w-1/3" />
+        </div>
+        <Card className="p-4">
+          <div className="flex flex-wrap gap-4">
+            <SkeletonBlock className="aspect-[3/4] w-24 shrink-0 rounded-xl" />
+            <div className="min-w-[12rem] flex-1 space-y-2">
+              <SkeletonBlock className="h-3.5 w-2/3" />
+              <SkeletonBlock className="h-3.5 w-1/2" />
+              <SkeletonBlock className="h-3.5 w-1/2" />
+              <SkeletonBlock className="h-3.5 w-2/5" />
+            </div>
+          </div>
+        </Card>
+        <SkeletonList rows={2} label="正在打开这本书…" />
+      </div>
+    );
   }
 
   if (detail === undefined) {
@@ -723,7 +744,7 @@ export function BookDetailPage(): ReactNode {
           loans.map((loan) => {
             const copy = copies.find((item) => item.id === loan.copyId);
             return (
-              <Card key={loan.id} className="p-3">
+              <Card key={loan.id} className="animate-fade-rise p-3">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
                     借给 {loan.borrower}

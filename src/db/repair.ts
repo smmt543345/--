@@ -42,6 +42,17 @@ const EMPTY_REPORT = (): RepairReport => ({
 /** 环检测的迭代上限：每次迭代至少打断一个环，正常数据不可能逼近这个数。 */
 const MAX_CYCLE_PASSES = 64;
 
+/**
+ * 把可能是任何东西的值收敛成字符串数组（I11）：
+ * 数组 → 剔掉非字符串项；字符串 → 单元素数组；其他 → 空数组。
+ * 为什么不复用 03 的导入清洗：那一个在 backup 层，db 层不该反向依赖它（01 §3）。
+ */
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string');
+  if (typeof value === 'string') return value.trim() === '' ? [] : [value];
+  return [];
+}
+
 export async function repairInvariants(db: PocketLibraryDb): Promise<RepairReport> {
   return db.transaction(
     'rw',
@@ -101,6 +112,18 @@ export async function repairInvariants(db: PocketLibraryDb): Promise<RepairRepor
       report.orphanCoversDeleted += orphanCoverIds.length;
       for (const bookId of orphanCoverIds) {
         report.warnings.push(`封面（书目 ${bookId}）指向的书目不存在，已删除`);
+      }
+
+      /* ---- I11（B6）：书目字段形状 ---- */
+      // 作者/标签必须是字符串数组。导入通道会把非数组当空数组（03 §3），
+      // 但手改过的库、别处写坏的库得靠这里兜底——否则「authors.join」会在界面上直接抛错。
+      for (const book of await db.books.toArray()) {
+        const authors = toStringArray(book.authors);
+        const tags = toStringArray(book.tags);
+        const same = (value: unknown): boolean => Array.isArray(value) && value.every((item) => typeof item === 'string');
+        if (same(book.authors) && same(book.tags)) continue;
+        await db.books.put({ ...book, authors, tags, updatedAt: nowIso() });
+        report.warnings.push(`书目「${book.title}」的作者/标签字段不是字符串数组，已修正`);
       }
 
       /* ---- I2：副本指向的位置必须存在 ---- */
@@ -211,6 +234,14 @@ export async function checkInvariants(db: PocketLibraryDb): Promise<{ ok: boolea
   const bookIds = new Set(books.map((b) => b.id));
   const locationIds = new Set(locations.map((l) => l.id));
   const copyIds = new Set(copies.map((c) => c.id));
+
+  // I11：作者/标签必须是字符串数组（非数组会让界面在 authors.join 上直接抛错）
+  const isStringArray = (value: unknown): boolean => Array.isArray(value) && value.every((item) => typeof item === 'string');
+  for (const book of books) {
+    if (!isStringArray(book.authors) || !isStringArray(book.tags)) {
+      problems.push(`书目「${book.title}」的作者/标签字段不是字符串数组（I11）`);
+    }
+  }
 
   for (const copy of copies) {
     if (!bookIds.has(copy.bookId)) problems.push(`副本 ${copy.id} 的书目不存在（I1）`);

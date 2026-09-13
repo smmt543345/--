@@ -21,6 +21,7 @@ import {
   describeLastExport,
   importSummaryRows,
 } from '../../app/labels.ts';
+import { SkeletonBlock } from '../../app/Skeleton.tsx';
 import {
   Banner,
   Button,
@@ -29,7 +30,6 @@ import {
   ConfirmDialog,
   InlineError,
   PageHeader,
-  Spinner,
   TextField,
   type ChoiceOption,
 } from '../../app/ui.tsx';
@@ -333,7 +333,13 @@ export function SettingsPage(): ReactNode {
         <Card className="space-y-3 p-4">
           <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">导出备份</h2>
           {counts === null ? (
-            <Spinner label="正在统计…" />
+            // 统计首屏骨架（04 §11.9 第 3 条）：三行文字占位，数字到位就地填上
+            <div className="space-y-2" role="status" aria-busy="true" aria-live="polite">
+              <span className="sr-only">正在统计…</span>
+              <SkeletonBlock className="h-4 w-3/4" />
+              <SkeletonBlock className="h-4 w-full" />
+              <SkeletonBlock className="h-4 w-1/3" />
+            </div>
           ) : (
             <>
               <p className="text-sm text-neutral-600 dark:text-neutral-300">

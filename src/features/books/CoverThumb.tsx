@@ -10,12 +10,12 @@ import type { ReactNode } from 'react';
 
 import { useDb } from '../../app/db-context.ts';
 import { useObjectUrl } from '../../app/hooks.ts';
-import { cn } from '../../app/ui.tsx';
+import { COVER_EDGE_CLASS, cn } from '../../app/ui.tsx';
 import { useLiveQuery } from '../../app/useLiveQuery.ts';
 import { getCover } from '../../db/covers.ts';
 import type { Cover } from '../../domain/types.ts';
 
-/** 行首缩略图尺寸（04 §11.8：~40px）。 */
+/** 行首缩略图尺寸（04 §11.8：~40px）。边框与圆角见 04 §11.9：6px 圆角 + 1px 细边，边色与详情页共用一份令牌。 */
 const THUMB_CLASS = 'h-10 w-10';
 
 export function CoverThumb({ bookId, className }: { bookId: string; className?: string }): ReactNode {
@@ -30,11 +30,7 @@ export function CoverThumb({ bookId, className }: { bookId: string; className?: 
       src={url}
       // 书名就在同一行旁边，这里再念一遍是重复；缩略图本身是装饰
       alt=""
-      className={cn(
-        THUMB_CLASS,
-        'shrink-0 rounded-md border border-neutral-200 object-cover dark:border-neutral-800',
-        className,
-      )}
+      className={cn(THUMB_CLASS, COVER_EDGE_CLASS, 'shrink-0 rounded-md object-cover', className)}
     />
   );
 }

@@ -9,7 +9,9 @@
 import { useState, type ReactNode } from 'react';
 
 import { useDb } from '../../app/db-context.ts';
-import { Button, Card, ConfirmDialog, EmptyState, InlineError, Spinner, TextField } from '../../app/ui.tsx';
+import { NoBorrowersArt } from '../../app/illustrations.tsx';
+import { Button, Card, ConfirmDialog, EmptyState, InlineError, TextField } from '../../app/ui.tsx';
+import { SkeletonBlock } from '../../app/Skeleton.tsx';
 import { useAsyncAction, useLiveQuery } from '../../app/useLiveQuery.ts';
 import { createBorrower, deleteBorrower, listBorrowers, updateBorrower } from '../../db/borrowers.ts';
 import type { Borrower } from '../../domain/types.ts';
@@ -35,7 +37,15 @@ export function BorrowerSection(): ReactNode {
     return (
       <Card className="space-y-3 p-4">
         <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">借书人</h2>
-        <Spinner label="正在读取借书人…" />
+        <div className="space-y-2" role="status" aria-busy="true" aria-live="polite">
+          <span className="sr-only">正在读取借书人…</span>
+          {Array.from({ length: 3 }, (_, index) => (
+            <div key={index} className="flex items-center gap-3 rounded-lg border border-neutral-200 p-2 dark:border-neutral-800">
+              <SkeletonBlock className="h-4 w-24" />
+              <SkeletonBlock className="h-3.5 w-32" />
+            </div>
+          ))}
+        </div>
       </Card>
     );
   }
@@ -84,13 +94,13 @@ export function BorrowerSection(): ReactNode {
       </div>
 
       {borrowers.length === 0 ? (
-        <EmptyState title="还没有借书人" hint="添加一位，或者借出一本书后自动出现。" />
+        <EmptyState illustration={<NoBorrowersArt />} title="还没有借书人" hint="添加一位，或者借出一本书后自动出现。" />
       ) : (
         <ul className="space-y-2">
           {borrowers.map((person) => (
             <li
               key={person.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-200 px-3 py-2 dark:border-neutral-800"
+              className="flex animate-fade-rise flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-200 px-3 py-2 dark:border-neutral-800"
             >
               {editing !== null && editing.id === person.id ? (
                 <div className="flex flex-wrap items-end gap-2">

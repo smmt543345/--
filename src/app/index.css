@@ -7,9 +7,120 @@
  */
 @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
 
+/* ==========================================================================
+ * 美术方向 B6：纸 · 墨 · 朱（2026-09-13）
+ *
+ * 与木刻版画应用图标同一套颜色体系：宣纸底、暖墨字、靛墨主色、朱砂点校。
+ * 实现手段：**直接覆盖 Tailwind 的色阶令牌**——界面通篇用的是
+ * neutral/blue/red/amber/emerald 这 5 个色阶（neutral 一处就有 400+ 次），
+ * 改这里等于全应用换色，不用逐页改类名。
+ *
+ * 为什么主色是「靛墨」而不是朱红：朱红要留给「批阅」——印章式的强调与危险操作。
+ * 主按钮若也用朱红，危险按钮就压不住台了（古人抄书正是黑墨为主、朱笔点校）。
+ * ========================================================================== */
+@theme {
+  /* 宣纸 → 暖墨 的 neutral 阶（浅色模式：纸；深色模式：夜墨） */
+  --color-neutral-50: #f7f2e7;
+  --color-neutral-100: #f1e9d7;
+  --color-neutral-200: #e3d8c1;
+  --color-neutral-300: #ccbfa4;
+  --color-neutral-400: #a99b80;
+  --color-neutral-500: #877a62;
+  --color-neutral-600: #6a5f4b;
+  --color-neutral-700: #4b4335;
+  --color-neutral-800: #322d25;
+  --color-neutral-900: #221e18;
+  --color-neutral-950: #16130f;
+
+  /* 主色：靛墨（书页上的蓝黑墨） */
+  --color-blue-50: #f1f4f8;
+  --color-blue-100: #e0e7ef;
+  --color-blue-200: #c2cfdd;
+  --color-blue-300: #97aac4;
+  --color-blue-400: #6a82a3;
+  --color-blue-500: #485f80;
+  --color-blue-600: #354966;
+  --color-blue-700: #2b3b52;
+  --color-blue-800: #222e40;
+  --color-blue-900: #1a222f;
+
+  /* 危险 / 印章：朱砂 */
+  --color-red-50: #fbf0ec;
+  --color-red-100: #f6dbd4;
+  --color-red-200: #edbaae;
+  --color-red-300: #de9181;
+  --color-red-400: #cb6a54;
+  --color-red-500: #bd4a37;
+  --color-red-600: #a83527;
+  --color-red-700: #8c2b20;
+  --color-red-800: #6f231a;
+  --color-red-900: #541b14;
+  --color-red-950: #360f0b;
+
+  /* 提醒：藤黄 */
+  --color-amber-50: #fbf5e8;
+  --color-amber-100: #f7ebc9;
+  --color-amber-200: #efd797;
+  --color-amber-300: #e2bb60;
+  --color-amber-400: #d2a138;
+  --color-amber-500: #c8922a;
+  --color-amber-600: #ac7a21;
+  --color-amber-700: #8a5f1c;
+  --color-amber-800: #6b4917;
+  --color-amber-900: #4e3613;
+  --color-amber-950: #2e200c;
+
+  /* 在架 / 一切正常：苔绿 */
+  --color-emerald-50: #f0f4ee;
+  --color-emerald-100: #dde7d8;
+  --color-emerald-200: #bccfb6;
+  --color-emerald-300: #96b08e;
+  --color-emerald-400: #6f8f67;
+  --color-emerald-500: #587452;
+  --color-emerald-600: #4a6b4a;
+  --color-emerald-700: #3b563b;
+  --color-emerald-800: #2e442e;
+  --color-emerald-900: #223322;
+  --color-emerald-950: #131e13;
+
+  /* 版画是方的：圆角整体收敛一档（卡片 12→6px，弹窗 16→8px） */
+  --radius-md: 0.25rem;
+  --radius-lg: 0.3125rem;
+  --radius-xl: 0.375rem;
+  --radius-2xl: 0.5rem;
+  --radius-3xl: 0.625rem;
+
+  /* 没影子的印刷：阴影改成极淡的墨色投影，靠细墨线分隔而非浮起来 */
+  --shadow-sm: 0 1px 2px -1px rgb(34 30 24 / 0.10);
+  --shadow-md: 0 2px 6px -2px rgb(34 30 24 / 0.14);
+  --shadow-lg: 0 6px 16px -6px rgb(34 30 24 / 0.18);
+  --shadow-xl: 0 10px 24px -10px rgb(34 30 24 / 0.22);
+  --shadow-2xl: 0 18px 40px -18px rgb(34 30 24 / 0.28);
+}
+
 /*
- * 视觉基调（04 §10）：精致极简。全局令牌只在这一个文件里定——
- * 字体、抗锯齿、选区、滚动条、焦点环、标题字距。
+ * 微动效令牌（04 §11.9 第 4 条）：列表项首次进入的渐显。
+ * 纯 CSS animation，不用 JS 计时器 —— 列表重排时 React 复用同一批 DOM 节点，
+ * 动画因此只在元素真正进入时播一次，不会每敲一个字重播一遍。
+ * 末帧不写 transform：动画结束后元素不留残余 transform（免得凭空多出一个包含块）。
+ */
+@theme {
+  --animate-fade-rise: fade-rise 200ms ease-out both;
+
+  @keyframes fade-rise {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+    }
+  }
+}
+
+/*
+ * 视觉基调（04 §10 / §11.11，B6 美术方向）：纸 · 墨 · 朱。
+ * 全局令牌只在这一个文件里定——字体、纸纹、抗锯齿、选区、滚动条、焦点环、标题字距。
  */
 
 html {
@@ -18,28 +129,61 @@ html {
 
 body {
   margin: 0;
+  /* 正文用无衬线（中文屏幕上可读性最好）；标题另走衬线（见下） */
   font-family:
     -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  background-color: var(--color-neutral-50);
 }
 
-/* 标题收紧字距：中文字形下微微收紧更显精致 */
+/* 纸纹：极淡的纤维网状纹理（固定覆盖层，不吃点击）。
+ * 透明度必须压到 3% 以下——再明显一点就从「纸」变成「屏幕脏了」。
+ * 深浅两套颗粒色走变量，避免在伪元素里堆选择器。 */
+:root {
+  --grain-x: rgb(34 30 24 / 0.035);
+  --grain-y: rgb(34 30 24 / 0.022);
+}
+:root[data-theme='dark'] {
+  --grain-x: rgb(247 242 231 / 0.03);
+  --grain-y: rgb(247 242 231 / 0.018);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --grain-x: rgb(247 242 231 / 0.03);
+    --grain-y: rgb(247 242 231 / 0.018);
+  }
+}
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  background-image:
+    repeating-linear-gradient(0deg, var(--grain-x) 0 1px, transparent 1px 3px),
+    repeating-linear-gradient(90deg, var(--grain-y) 0 1px, transparent 1px 4px);
+}
+
+/* 标题走衬线：字面（宋体/明朝体）自带书卷气，和木刻版画图标同源 */
 h1,
 h2,
 h3 {
-  letter-spacing: -0.015em;
+  font-family: Georgia, 'Times New Roman', 'Songti SC', 'Source Han Serif SC', 'Noto Serif CJK SC',
+    'SimSun', serif;
+  letter-spacing: 0;
 }
 
+/* 选区分块用朱砂（批校色） */
 ::selection {
-  background: rgb(37 99 235 / 0.16);
+  background: rgb(168 53 39 / 0.18);
 }
 
-/* 键盘导航的焦点环：细、蓝、不抢戏 */
+/* 键盘导航的焦点环：朱砂细环，像给控件盖了个小印 */
 :focus-visible {
-  outline: 2px solid rgb(37 99 235 / 0.45);
+  outline: 2px solid rgb(168 53 39 / 0.5);
   outline-offset: 2px;
 }
 
@@ -72,5 +216,21 @@ h3 {
     transition-property: background-color, border-color;
     transition-duration: 150ms;
     transition-timing-function: ease-out;
+  }
+}
+
+/*
+ * prefers-reduced-motion（04 §11.9 第 4 条）：系统开了「减少动态效果」，
+ * 动画与过渡一律关掉 —— 包含骨架屏的脉冲、卡片悬停浮起、列表渐显。
+ * 用 !important 是有意的：这条要压过组件上的 animate-* / transition-* 工具类，
+ * 不能靠"每个组件自己记得写 motion-reduce:"——漏一个就等于没做。
+ * animation:none 而非把时长压到 0：无限循环的脉冲动画在时长 0 下仍会重播。
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
   }
 }
