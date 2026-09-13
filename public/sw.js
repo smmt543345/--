@@ -6,12 +6,14 @@
  *
  * 策略：
  * - 页面（navigate）网络优先，失败退回缓存 —— 每次上线都拿到新版本，断网时打底。
- * - 构建产物缓存优先 —— 文件名带内容哈希，命中即不可变，二次访问秒开、断网可用。
+ * - 构建产物（带内容哈希）缓存优先 —— 命中即不可变，二次访问秒开、断网可用。
+ * - **不帶哈希的身份文件（`icons/*`、manifest）网络优先** —— 图标文件名固定，
+ *   缓存优先会让旧图标永远刷不掉（2026-09-13 实障：换了应用图标，浏览器里还是旧的）。
  * - activate 时清掉旧版本缓存名。
  *
  * 注意：本文件是纯 JS（不进 Vite 编译），改缓存策略时记得同步 bump 缓存名前缀版本。
  */
-const CACHE_PREFIX = 'pocket-library-v1';
+const CACHE_PREFIX = 'pocket-library-v2';
 const SHELL_CACHE = `${CACHE_PREFIX}-shell`; // 页面文档
 const ASSET_CACHE = `${CACHE_PREFIX}-assets`; // 带哈希的 js/css/字体等
 
@@ -63,9 +65,22 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 静态资源：缓存优先，未命中回网络并顺手缓存
+  // 静态资源：构建产物（带哈希）缓存优先；图标与 manifest 网络优先
   event.respondWith(
     (async () => {
+      if (isIdentityFile(url)) {
+        try {
+          const response = await fetch(request);
+          if (response.ok) {
+            const cache = await caches.open(ASSET_CACHE);
+            await cache.put(request, response.clone());
+          }
+          return response;
+        } catch {
+          const cached = await caches.match(request);
+          return cached ?? new Response('', { status: 504, statusText: 'Offline' });
+        }
+      }
       const cached = await caches.match(request);
       if (cached !== undefined) return cached;
       try {
@@ -81,3 +96,8 @@ self.addEventListener('fetch', (event) => {
     })(),
   );
 });
+
+/** 不帶内容哈希的身份文件：应用图标与 manifest（改了必须能刷掉）。 */
+function isIdentityFile(url) {
+  return url.pathname.includes('/icons/') || url.pathname.endsWith('.webmanifest');
+}
