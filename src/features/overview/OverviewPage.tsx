@@ -22,6 +22,7 @@ import { SETTING_KEYS, getSetting } from '../../db/settings.ts';
 import { getStats, type LibraryStats } from '../../db/stats.ts';
 import { daysSince, isTimestampString, toLocalDate, today } from '../../domain/time.ts';
 import type { Book, CopyWithLocation, LoanWithBook } from '../../domain/types.ts';
+import { CoverThumb } from '../books/CoverThumb.tsx';
 
 /** 超过这么多天没导出就醒目提醒（01 §3.2 第 3 条）。 */
 const EXPORT_REMINDER_DAYS = 14;
@@ -208,7 +209,9 @@ function OverviewContent({
                     to={`/books/${book.id}`}
                     className="flex min-h-11 items-center justify-between gap-3 p-3 hover:bg-neutral-50 dark:hover:bg-neutral-800/60"
                   >
-                    <span className="min-w-0">
+                    {/* 行首缩略图（04 §11.8）：没有照片就不渲染，这一行不会多出一块空格 */}
+                    <CoverThumb bookId={book.id} />
+                    <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium">{bookDisplayTitle(book)}</span>
                       <span className="mt-0.5 block truncate text-xs text-neutral-500 dark:text-neutral-400">
                         {authorsText(book.authors)}

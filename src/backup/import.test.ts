@@ -6,11 +6,12 @@ import { createBook } from '../db/books.ts';
 import { createCopy, getCopy } from '../db/copies.ts';
 import { createLocation } from '../db/locations.ts';
 import { loanOut, returnCopy } from '../db/loans.ts';
+import { coverToDataUrl, getCover, putCover } from '../db/covers.ts';
 import { checkInvariants } from '../db/repair.ts';
 import type { PocketLibraryDb } from '../db/schema.ts';
 import { dump, snapshot, withDb, withRawDb } from '../testing/harness.ts';
 import { buildBackup, exportToJson } from './export.ts';
-import { parseBackup, type BackupFile, type ImportSummary } from './format.ts';
+import { parseBackup, type BackupCover, type BackupFile, type ImportSummary } from './format.ts';
 import { applyImport, importFromText, previewImport } from './import.ts';
 
 /**
@@ -87,6 +88,23 @@ interface FileData {
   books?: Book[];
   copies?: Copy[];
   loans?: Loan[];
+  borrowers?: unknown[];
+  covers?: BackupCover[];
+}
+
+/** 一张最小可用的“照片”：载荷是几个可辨别的字节，验的是字节往返。 */
+function jpegBlob(...bytes: number[]): Blob {
+  return new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' });
+}
+
+function coverWire(bookId: string, payload = 'AQID', updatedAt = STAMP): BackupCover {
+  return { bookId, mime: 'image/jpeg', dataUrl: `data:image/jpeg;base64,${payload}`, createdAt: STAMP, updatedAt };
+}
+
+async function blobBytes(db: PocketLibraryDb, bookId: string): Promise<number[]> {
+  const cover = await getCover(db, bookId);
+  assert.ok(cover !== undefined, `书目 ${bookId} 应当有封面`);
+  return [...new Uint8Array(await cover.blob.arrayBuffer())];
 }
 
 function fileOf(data: FileData, top: Record<string, unknown> = {}): BackupFile {
@@ -111,7 +129,13 @@ function parseOk(text: string): BackupFile {
 
 /** 只看计数，忽略 warnings / durationMs。 */
 function counts(summary: ImportSummary): Record<string, unknown> {
-  return { locations: summary.locations, books: summary.books, copies: summary.copies, loans: summary.loans };
+  return {
+    locations: summary.locations,
+    books: summary.books,
+    copies: summary.copies,
+    loans: summary.loans,
+    covers: summary.covers,
+  };
 }
 
 const NOTHING_CHANGED = {
@@ -119,6 +143,7 @@ const NOTHING_CHANGED = {
   books: { inserted: 0, updated: 0, mergedByIsbn: 0 },
   copies: { inserted: 0, updated: 0, skipped: 0, relocated: 0 },
   loans: { inserted: 0, updated: 0, skipped: 0, conflicts: 0 },
+  covers: { inserted: 0, updated: 0, skipped: 0 },
 };
 
 describe('导入：字段级合并规则（03 §5.1）', () => {
@@ -341,6 +366,125 @@ describe('导入：借出记录（03 §5.2、决策 D6）', () => {
   });
 });
 
+describe('导入：封面（03 §4.7、§10 T22/T23）', () => {
+  it('T22 封面往返：导出带 covers，再导入后 base64 与时间戳一字不差', async () => {
+    await withDb(async (source) => {
+      const bk = await createBook(source, { title: '书' });
+      await putCover(source, { bookId: bk.id, blob: jpegBlob(1, 2, 3, 250), mime: 'image/jpeg' }, { now: STAMP });
+
+      const backup = parseOk(await exportToJson(source));
+      assert.equal(backup.counts.covers, 1);
+      const wire = backup.data.covers[0];
+      assert.ok(wire, '导出必须带上封面段');
+      assert.ok(wire.dataUrl.startsWith('data:image/jpeg;base64,'), 'JSON 装不下二进制，进文件前要转成 data URL');
+
+      await withDb(async (target) => {
+        const summary = await applyImport(target, backup);
+        assert.equal(summary.covers.inserted, 1);
+        assert.equal(summary.covers.updated, 0);
+        assert.equal(summary.covers.skipped, 0);
+
+        const imported = await getCover(target, bk.id);
+        assert.ok(imported, '照片必须落到新设备上（换机不丢照片）');
+        assert.equal(imported.mime, 'image/jpeg');
+        assert.equal(imported.updatedAt, wire.updatedAt, '拍照时间不能被导入改写');
+        assert.equal(await coverToDataUrl(imported), wire.dataUrl, 'base64 必须一字不差地回来');
+
+        const check = await checkInvariants(target);
+        assert.equal(check.ok, true, check.problems.join('; '));
+      });
+    });
+  });
+
+  it('T23 封面指向的书目不存在 → 跳过并警告，不留孤儿（I10）', async () => {
+    await withDb(async (target) => {
+      const summary = await applyImport(target, fileOf({ covers: [coverWire('查无此书')] }));
+
+      assert.equal(summary.covers.skipped, 1);
+      assert.equal(await target.covers.count(), 0, '孤儿封面不能先插进来、再被修复通道删掉');
+      assert.ok(summary.warnings.some((w) => w.includes('查无此书')), '跳过了就要说清是哪一个');
+
+      const check = await checkInvariants(target);
+      assert.equal(check.ok, true, check.problems.join('; '));
+    });
+  });
+
+  it('封面按 bookId 对齐，按 updatedAt 后写覆盖：旧文件顶不掉新照片', async () => {
+    const mine = newId();
+    await withDb(async (target) => {
+      await target.books.put(book(mine, '书'));
+      await putCover(target, { bookId: mine, blob: jpegBlob(1, 1), mime: 'image/jpeg' }, { now: LATER });
+
+      // 对方那张更旧 → 本机新拍的不该被顶掉
+      const older = await applyImport(target, fileOf({ covers: [coverWire(mine, 'AgID', STAMP)] }));
+      assert.equal(older.covers.updated, 0);
+      assert.deepEqual(await blobBytes(target, mine), [1, 1], '旧文件不得覆盖新照片');
+
+      // 对方那张更新 → 换过去，并计一次 updated
+      const newer = await applyImport(
+        target,
+        fileOf({ covers: [coverWire(mine, 'AwMD', '2026-09-01T00:00:00.000Z')] }),
+      );
+      assert.equal(newer.covers.updated, 1);
+      assert.equal(newer.covers.inserted, 0);
+      assert.deepEqual(await blobBytes(target, mine), [3, 3, 3], '更新的那张要真的换进去');
+    });
+  });
+
+  it('封面跟着 ISBN 合并走：对方书目并进本地那条，照片落到本地 id 上', async () => {
+    const isbn = '9787111544937';
+    const myId = newId();
+    await withDb(async (target) => {
+      await target.books.put(book(myId, '深入理解计算机系统', isbn, STAMP));
+
+      const summary = await applyImport(
+        target,
+        fileOf({
+          books: [book('friend-book', '深入理解计算机系统（第3版）', isbn, LATER)],
+          covers: [coverWire('friend-book', 'AQID')],
+        }),
+      );
+
+      assert.equal(summary.covers.inserted, 1);
+      assert.equal(await target.covers.count(), 1, '封面按重指向后的书目 id 落地，不留孤儿');
+      assert.deepEqual(await blobBytes(target, myId), [1, 2, 3]);
+      assert.equal(await getCover(target, 'friend-book'), undefined, '对方的书目 id 下不该留封面');
+      assert.equal((await checkInvariants(target)).ok, true);
+    });
+  });
+
+  it('replace 模式：本机封面被清掉，文件里的封面完整导入（03 §6）', async () => {
+    await withDb(async (target) => {
+      const local = await createBook(target, { title: '本机的书' });
+      await putCover(target, { bookId: local.id, blob: jpegBlob(9, 9), mime: 'image/jpeg' });
+
+      const summary = await applyImport(
+        target,
+        fileOf({ books: [book('friend-book', '朋友的书')], covers: [coverWire('friend-book', 'AQID')] }),
+        { mode: 'replace' },
+      );
+
+      assert.equal(summary.covers.inserted, 1);
+      assert.equal(await target.covers.count(), 1, 'replace = 清空 + 整体写入，本机照片不该混在里面');
+      assert.equal(await getCover(target, local.id), undefined, '本机那张已随数据清掉');
+      assert.deepEqual(await blobBytes(target, 'friend-book'), [1, 2, 3]);
+      assert.equal((await checkInvariants(target)).ok, true);
+    });
+  });
+
+  it('previewImport 不落任何封面（预览 = 跑一遍再整体回滚）', async () => {
+    await withDb(async (target) => {
+      const summary = await previewImport(
+        target,
+        fileOf({ books: [book('friend-book', '书')], covers: [coverWire('friend-book')] }),
+      );
+
+      assert.equal(summary.covers.inserted, 1, '预览要给出真实的变更数量');
+      assert.equal(await target.covers.count(), 0, '预览不得留下封面');
+    });
+  });
+});
+
 describe('导入：空库导入完整备份（03 §10 T1）', () => {
   it('空库导入完整备份：四张表计数与文件一致，「未分类」存在', async () => {
     const file = fileOf({
@@ -418,6 +562,7 @@ describe('导入：幂等与原子性（03 §7、§8）', () => {
         await returnCopy(source, { copyId: cp.id, returnDate: '2026-01-20' });
         await loanOut(source, { copyId: cp.id, borrower: '小李' });
         await createCopy(source, { bookId: bk, locationId: UNSORTED_LOCATION_ID });
+        await putCover(source, { bookId: bk, blob: jpegBlob(4, 5, 6), mime: 'image/jpeg' }, { now: LATER });
 
         const file = await buildBackup(source);
         const first = await applyImport(target, file);
@@ -425,12 +570,14 @@ describe('导入：幂等与原子性（03 §7、§8）', () => {
         assert.equal(first.copies.inserted, 2);
         assert.equal(first.loans.inserted, 2);
         assert.equal(first.copies.skipped, 0);
+        assert.equal(first.covers.inserted, 1);
 
         const before = snapshot(await dump(target));
         const second = await applyImport(target, file);
 
         assert.deepEqual(counts(second), NOTHING_CHANGED, '第二次导入不得产生任何写入');
         assert.equal(snapshot(await dump(target)), before, '数据库内容必须逐字节一致');
+        assert.deepEqual(await blobBytes(target, bk), [4, 5, 6], '第二次导入不得重写照片');
         assert.deepEqual(second.warnings, []);
       });
     });

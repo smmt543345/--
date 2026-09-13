@@ -79,7 +79,7 @@ describe('previewMatchesChoice', () => {
   });
 });
 
-const COUNTS: BackupCounts = { locations: 4, books: 12, copies: 15, loans: 3, borrowers: 2 };
+const COUNTS: BackupCounts = { locations: 4, books: 12, copies: 15, loans: 3, borrowers: 2, covers: 0 };
 
 function makeSummary(overrides: Partial<ImportSummary> = {}): ImportSummary {
   const empty = { inserted: 0, updated: 0, skipped: 0 };
@@ -91,6 +91,7 @@ function makeSummary(overrides: Partial<ImportSummary> = {}): ImportSummary {
     copies: { ...empty, relocated: 0 },
     loans: { ...empty, conflicts: 0 },
     borrowers: { inserted: 0, updated: 0 },
+    covers: { inserted: 0, updated: 0, skipped: 0 },
     warnings: [],
     durationMs: 1,
     ...overrides,
@@ -133,6 +134,7 @@ describe('describeRepairReport', () => {
     loansDeleted: 0,
     duplicateActiveLoansResolved: 0,
     copyStatusFixed: 0,
+    orphanCoversDeleted: 0,
     pathsRebuilt: 0,
     warnings: [],
   };

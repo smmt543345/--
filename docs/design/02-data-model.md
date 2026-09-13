@@ -31,6 +31,7 @@ Snapshot  快照（系统表，供删除撤销与全库回滚，见 §12）
 | 借出 | `Loan` | 挂在**副本**上，不挂书目 |
 | 借书人 | `Borrower` | 借书人候选（P0-3）；无外键，与 Loan 解耦 |
 | 快照 | `Snapshot` | 删除撤销 + 自动快照共用（P0-4）；不参与业务外键 |
+| 封面 | `Cover` | 书目的一对一封面照片（本地 Blob，B4）；进备份不进自动快照，见 §3.5 |
 
 ---
 
@@ -75,6 +76,26 @@ Snapshot  快照（系统表，供删除撤销与全库回滚，见 §12）
 **为什么 `authors` 是数组而不是原文案的 `author` 字符串**：Open Library / Google Books 返回的就是数组；合成一个字符串会丢掉结构，之后想按作者精确筛选、或做「同一作者的其他书」，都得反过来拆字符串。UI 展示时 `authors.join(' / ')` 即可，成本为零。
 
 **为什么字段全部必填且用空值而不是 `undefined`**：IndexedDB 的索引不收录 `undefined`，字段时有时无会让「查 xx 为空的书」这类查询行为不一致。全字段存在 + 空值默认，导出文件也规整。
+
+---
+
+## 3.5 Cover（封面照片，B4）
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `bookId` | `string` | ✅ | 主键（一本书至多一张），指向 `Book.id` |
+| `blob` | `Blob` | ✅ | 压缩后的 JPEG（长边 ≤1000px） |
+| `mime` | `string` | ✅ | 固定 `image/jpeg`（v1 只收这一种） |
+| `createdAt` | `string` | ✅ | ISO 时间戳 |
+| `updatedAt` | `string` | ✅ | ISO 时间戳，重拍刷新 |
+
+规则：
+- 照片**只存本机**（IndexedDB Blob），不上传任何服务。
+- 一本书一张：重拍 = 覆盖同一行（`bookId` 主键）。
+- 删书目级联删封面；**撤销删除时封面一并恢复**（undo 快照含封面，§12.2）。
+- 自动/恢复快照**不含封面**（否则 10 份快照各复制一遍照片）；快照回滚不动封面表，
+  孤儿封面由 `repairInvariants` 清理（§6 I10）。
+- **进备份文件**（03 §2 的 `data.covers`，base64 data URL），换设备封面不丢。
 
 ---
 
@@ -163,6 +184,7 @@ Snapshot  快照（系统表，供删除撤销与全库回滚，见 §12）
 | I7 | `Copy.status='lent_out'` ⟺ 该副本存在 active 借出（`lost`/`sold` 除外） | 有 active 借出但状态不对 → 置 `lent_out`；状态是 `lent_out` 但无 active 借出 → 置 `on_shelf`；副本是 `lost`/`sold` 但有 active 借出 → 关闭该借出（`returnDate` = 当天，`note` 追加说明） |
 | I8 | `Location.path` / `depth` 与树的实际结构一致 | 整树重算（§4） |
 | I9 | 不存在 `id` 重复的多行 | 不可能的数据库层面情况；导入时以 `id` 为准合并（03） |
+| I10 | 每个 `Cover.bookId` 指向存在的 `Book` | 删除孤儿封面并记警告（B4） |
 
 **I6 的优先级说明**：导入时的冲突裁定见 03 §4.6，那里的规则是「本地优先」，与本表 I6 的「保留最新」不同——I6 是**修复已损坏数据**时的兜底，两者不冲突，因为修复只在导入后对确实违规的数据生效。
 
@@ -224,6 +246,11 @@ this.version(2).stores({
   borrowers: 'id, name',
   snapshots: 'id, kind, createdAt',
 });
+
+// B4（schema v3，2026-09-13）：封面照片表（bookId 作主键，一本书一张）
+this.version(3).stores({
+  covers: 'bookId',
+});
 ```
 
 说明：
@@ -232,7 +259,7 @@ this.version(2).stores({
 - `books.title` 上的索引只用于排序；关键词搜索是内存过滤（§10）。
 - `settings` 是键值表：`key` 主键，`value` 任意可 JSON 化的值，另有 `updatedAt`。
 - `borrowers.name` 索引用于查重（§5.5 规范化姓名唯一）；`snapshots.kind` 用于撤销/自动快照的筛选（§12）。
-- `SCHEMA_VERSION` 升为 `2`；备份文件导出时携带它（03 §2 的 `schemaVersion`）。
+- `SCHEMA_VERSION` 升为 `3`；备份文件导出时携带它（03 §2 的 `schemaVersion`）。
 
 ### 8.1 版本升级纪律
 
@@ -256,9 +283,9 @@ this.version(3).stores({
 |---|---|
 | 删位置 | 有子位置或有副本时**默认拒绝**。调用方必须显式给策略：`reparent`（子位置与副本上移到父位置）\| `cascade`（连同子位置、位置下的副本一并删除，副本对应的借出记录也删）。UI 必须二次确认，并明确告知将删除多少副本。 |
 | 删位置 → 副本上移 | 副本的 `locationId` 改为被删位置的 `parentId`；若为顶层则改为 `UNSORTED_LOCATION_ID`。 |
-| 删书目 | 有副本时**默认拒绝**，UI 引导先把副本逐个删除或转移；副本为 0 时允许删除（其历史借出随副本删除）。级联删除（连副本带借出记录一起删）是显式例外：只允许走 `deleteBookCompletely(db, bookId, { strategy: 'cascade' })`，UI 必须二次确认并写明将删除的副本数、借出记录数与正被借出的副本名单。 |
+| 删书目 | 有副本时**默认拒绝**，UI 引导先把副本逐个删除或转移；副本为 0 时允许删除（其历史借出随副本删除）。级联删除（连副本带借出记录一起删）是显式例外：只允许走 `deleteBookCompletely(db, bookId, { strategy: 'cascade' })`，UI 必须二次确认并写明将删除的副本数、借出记录数与正被借出的副本名单。**封面一并删除**（B4），撤销时随 undo 快照恢复。 |
 | 删副本 | 连带删除其全部借出记录（`Loan.copyId` 是 I3）。已借出的副本删除前必须二次确认，文案要写明「该副本正被 XX 借出」。 |
-| 清空数据 | 删除五张业务表（`locations`/`books`/`copies`/`loans`/`borrowers`）全部记录，重新播种「未分类」；`settings` **不动**（保留主题、AI 配置、表单记忆等本机偏好，缺键由 `ensureDefaultSettings` 补齐）；快照表**不动**（清空后仍可用快照恢复，04 §11.4）。 |
+| 清空数据 | 删除六张业务表（`locations`/`books`/`copies`/`loans`/`borrowers`/`covers`）全部记录，重新播种「未分类」；`settings` **不动**（保留主题、AI 配置、表单记忆等本机偏好，缺键由 `ensureDefaultSettings` 补齐）；快照表**不动**（清空后仍可用快照恢复，04 §11.4）。 |
 
 **级联删除是不可逆的重操作**，`cascade` 策略必须在函数的签名里显式传参，不允许作为默认值。
 
@@ -372,7 +399,12 @@ interface Snapshot {
 ```
 
 `data` 的形状与备份文件 `data` 段（03 §2）**完全一致**，复用同一套序列化路径
-（`backup/format.ts` 的 build 逻辑），不另造结构。
+（`backup/export.ts` 的 `buildBackup`，序列化/类型在 `backup/format.ts`；快照经 `includeCovers:false` 跳过照片），
+不另造结构。
+
+**封面例外（B4）**：auto / pre-restore 快照的 `data` **不含 covers**（照片大，10 份快照
+各存一遍会翻十倍）；`undo` 快照额外带 `covers?: Cover[]`——只含被删书目的封面，
+保证撤销删除后封面一并回来。
 
 ### 12.2 三种 kind
 
@@ -392,8 +424,9 @@ interface Snapshot {
   若与写同事务，回滚会把快照一起带走）。
 - **竞态接受**：提交与 `resetWriteCounter` 之间的并发写入可能漏计一次——只影响快照
   节奏、不丢数据，不加锁。
-- **计数口径**：仅五张业务表的增删改计入；`settings`、快照表本身、撤销/恢复的写入
-  一律不计（恢复是 replace 语义的整体重写，计入会立刻再触发阈值，无意义）。
+- **计数口径**：仅**六张业务表**（locations/books/copies/loans/borrowers/covers）的增删改计入；
+  `settings`、快照表本身、撤销/恢复的写入一律不计（恢复是 replace 语义的整体重写，计入会立刻再触发阈值，无意义）。
+  **封面照片的写入/删除也不计入**（B4）——照片不算「读写的书」，且快照不含封面，让拍照顶阈值会拍出不含照片的快照。
   `applyImport` 按实际变更条数计入（写进业务表的行数）；`previewImport` 不计（事务整体回滚）。
 - 保留最近 **10** 份 `auto`/`pre-restore` 快照，超出删最旧。
 - 设置页显示「最近快照时间」+ 快照列表 + 「恢复」按钮（04 §11）。
@@ -439,3 +472,6 @@ interface Snapshot {
 | S18 | `listAllTags` | 去重；标签多/单/零个书目的库都正确；稳定排序（§10.3） |
 | S19 | `listRecentBooks` | 按 `createdAt` 倒序；`limit` 截断；返回的副本组合视图完整（§10.3） |
 | S20 | 快照恢复前有未过期 undo | 恢复后该 undo 快照被清理（§12.4）；恢复结果不受其影响 |
+| S21 | 删书目→撤销（B4） | 封面照片随 undo 快照一并恢复（blob 字节一致） |
+| S22 | 快照回滚不动封面表（B4） | auto/pre-restore 快照 data 不含 covers；恢复后封面仍在 |
+| S23 | I10 孤儿封面清理（B4） | 封面指向不存在的书目 → repairInvariants 删除并记警告 |

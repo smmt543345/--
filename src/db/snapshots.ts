@@ -12,6 +12,7 @@ import { newId } from '../domain/ids.ts';
 import { nowIso } from '../domain/time.ts';
 import type { Snapshot, SnapshotKind } from '../domain/types.ts';
 import { buildBackup } from '../backup/export.ts';
+import type { BackupFile } from '../backup/format.ts';
 import { rebuildLocationPaths } from './locations.ts';
 import { repairInvariants } from './repair.ts';
 import {
@@ -43,12 +44,14 @@ export async function captureUndo(
   data: Partial<Snapshot['data']>,
   options: { now?: string } = {},
 ): Promise<Snapshot> {
-  const merged = {
+  const merged: Snapshot['data'] = {
     locations: data.locations ?? [],
     books: data.books ?? [],
     copies: data.copies ?? [],
     loans: data.loans ?? [],
     borrowers: data.borrowers ?? [],
+    // 02 §12.1：undo 快照额外带封面 —— 只含被删书目的那一张，撤销时一并写回
+    ...(data.covers === undefined ? {} : { covers: data.covers }),
   };
   const snapshot: Snapshot = {
     id: newId(),
@@ -71,12 +74,13 @@ export async function captureUndo(
 /**
  * 撤销恢复 = 按原 id 原样写回记录，随后跑 rebuildLocationPaths()
  * （撤销位置级联删除后，其余位置若在 30 秒内被移动过，物化路径可能已变）。
+ * 删书目/删位置带来的封面随 undo 快照一并写回（B4，02 §12.1）。
  * 恢复成功后清理该 undo。返回是否真的撤销了东西。
  */
 export async function restoreUndo(db: PocketLibraryDb): Promise<boolean> {
   return db.transaction(
     'rw',
-    [db.locations, db.books, db.copies, db.loans, db.borrowers, db.snapshots],
+    [db.locations, db.books, db.copies, db.loans, db.borrowers, db.covers, db.snapshots],
     async () => {
       const undo = await db.snapshots.where('kind').equals('undo').first();
       if (undo === undefined) return false;
@@ -86,6 +90,8 @@ export async function restoreUndo(db: PocketLibraryDb): Promise<boolean> {
       await db.copies.bulkPut(undo.data.copies);
       await db.loans.bulkPut(undo.data.loans);
       await db.borrowers.bulkPut(undo.data.borrowers);
+      // 只有删除操作捕获了封面；其余 undo（如删副本）没有这一段
+      await db.covers.bulkPut(undo.data.covers ?? []);
       await db.snapshots.delete(undo.id);
       await rebuildLocationPaths(db);
       return true;
@@ -124,17 +130,36 @@ export async function captureSnapshot(
   kind: RestorableKind,
   now?: string,
 ): Promise<Snapshot> {
-  const backup = await buildBackup(db);
+  // 02 §12.1 封面例外：自动/恢复快照不含 covers（照片大，10 份快照各存一遍会翻十倍），
+  // 所以这里连读都不读封面表 —— 读进来再丢掉只是白花一次 IO。
+  const backup = await buildBackup(db, { includeCovers: false });
   const snapshot: Snapshot = {
     id: newId(),
     kind,
     createdAt: now ?? nowIso(),
-    summary: backup.counts,
-    data: backup.data,
+    ...snapshotBodyOf(backup),
   };
   await db.snapshots.put(snapshot);
   await pruneRestorable(db);
   return snapshot;
+}
+
+/**
+ * 快照的 summary + data：与备份的 data 段同形（02 §12.1），但**刻意不含 covers**。
+ * 两条规矩落在这里：快照不复制照片；summary 保持五张业务表的计数口径。
+ */
+function snapshotBodyOf(backup: BackupFile): Pick<Snapshot, 'summary' | 'data'> {
+  const { locations, books, copies, loans, borrowers } = backup.data;
+  return {
+    summary: {
+      locations: locations.length,
+      books: books.length,
+      copies: copies.length,
+      loans: loans.length,
+      borrowers: borrowers.length,
+    },
+    data: { locations, books, copies, loans, borrowers },
+  };
 }
 
 /** 滚动保留：auto/pre-restore 超出 10 份时删最旧（02 §12.3）。 */
@@ -199,6 +224,7 @@ export function whenAutoSnapshotSettled(): Promise<void> {
 /**
  * 恢复快照（02 §12.4）：replace 语义 —— 清空五张业务表 + 整体写入快照 data，
  * 写入后跑 rebuildLocationPaths + repairInvariants；settings 与其余快照不动。
+ * **封面表不在恢复范围内**（02 §12.1）：列进事务只因收尾的修复通道会清掉孤儿封面（I10）。
  * 恢复前先自动拍 pre-restore 快照（恢复本身允许反悔），并清理当前 undo
  * （§9.1：旧撤销会把已恢复掉的数据写回）。
  * 恢复/撤销的写入不计入写计数器（§12.3）。
@@ -206,7 +232,7 @@ export function whenAutoSnapshotSettled(): Promise<void> {
 export async function restoreSnapshot(db: PocketLibraryDb, snapshotId: string, now?: string): Promise<Snapshot> {
   return db.transaction(
     'rw',
-    [db.locations, db.books, db.copies, db.loans, db.borrowers, db.snapshots, db.settings],
+    [db.locations, db.books, db.copies, db.loans, db.borrowers, db.covers, db.snapshots, db.settings],
     async () => {
       const target = await db.snapshots.get(snapshotId);
       if (target === undefined) throw new Error(`快照不存在：${snapshotId}`);

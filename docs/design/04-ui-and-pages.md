@@ -11,13 +11,13 @@
 
 | 路由 | 名称 | 在导航 | 主要数据依赖（service 函数） |
 |---|---|---|---|
-| `/` | 首页 · 总览 | ✅ | `getStats` · `listOverdueLoans` · `getSetting('lastExportAt')` · `listRecentBooks`（最近添加，§11.6） |
-| `/search` | 搜索 | ✅ | `searchBooks` · `listLocations` · `listAllTags`（标签筛选，§11.5） |
+| `/` | 首页 · 总览 | ✅ | `getStats` · `listOverdueLoans` · `getSetting('lastExportAt')` · `listRecentBooks`（最近添加，§11.6）· `getCover`（缩略图，§11.8） |
+| `/search` | 搜索 | ✅ | `searchBooks` · `listLocations` · `listAllTags`（标签筛选，§11.5）· `getCover`（缩略图，§11.8） |
 | `/locations` | 位置 | ✅ | `getLocationTree` · `getCopiesByLocation` · `listCopiesByLocation` · `createLocation` · `updateLocation` · `moveLocation` · `countLocationDependents` · `deleteLocation` |
 | `/loans` | 借出 | ✅ | `listActiveLoans` · `listOverdueLoans` · `listLoanHistory` · `loanOut` · `returnCopy` · 快速借出（§11.7）：`searchBooks` · `lendCopy` · `listBorrowers` |
 | `/settings` | 备份与设置 | ✅ | `exportToJson` · `markExported` · `importFromText` · `checkInvariants` · `clearAllData` · `getSetting`/`setSetting` · `completeChat`（AI 配置与测试连接，05 §3）· `listSnapshots` · `restoreSnapshot`（快照管理与恢复，02 §12）· `listBorrowers` · `createBorrower` · `updateBorrower` · `deleteBorrower`（借书人管理，02 §5.5）· `loanPeriodDays`（默认借期偏好，§11.7 引用） |
-| `/books/new` | 新增书目 | — | `findBooksByIsbn` · `createBook` · `submitBook` · `bulkImportBooks`（粘贴/CSV/xlsx 批量导入，05 §2）· `parseXlsx`（05 §2.1）· `completeChat`（AI 补全，05 §3）· 表单记忆（§11.2） |
-| `/books/:id` | 书目详情 | — | `getBookDetail` · `updateBook` · `findBooksByIsbn` · `createCopy` · `updateCopy` · `moveCopy` · `setCopyStatus` · `deleteCopy` · `listLocations` · `getActiveLoanForCopy` · `loanOut` · `returnCopy`（后两个经 `features/loans/write.ts` 的 `lendCopy`/`returnLoan`）· `deleteBookCompletely`（`features/books/write.ts`，级联删除走显式 `strategy: 'cascade'`）· `listBorrowers`（借书人候选，§11.3） |
+| `/books/new` | 新增书目 | — | `findBooksByIsbn` · `createBook` · `submitBook` · `bulkImportBooks`（粘贴/CSV/xlsx/文本类/docx 批量导入，05 §2）· `parseXlsx`（05 §2.1）· `completeChat`（AI 补全，05 §3）· `putCover`（拍照存封面，§11.8）· 表单记忆（§11.2） |
+| `/books/:id` | 书目详情 | — | `getBookDetail` · `updateBook` · `findBooksByIsbn` · `createCopy` · `updateCopy` · `moveCopy` · `setCopyStatus` · `deleteCopy` · `listLocations` · `getActiveLoanForCopy` · `loanOut` · `returnCopy`（后两个经 `features/loans/write.ts` 的 `lendCopy`/`returnLoan`）· `deleteBookCompletely`（`features/books/write.ts`，级联删除走显式 `strategy: 'cascade'`）· `listBorrowers`（借书人候选，§11.3）· `getCover`/`putCover`/`deleteCover`（封面，§11.8） |
 
 **为什么是这五个**：四张业务表（位置 / 书目 / 副本 / 借出，02 §1）里，书目与副本是同一件事的两个层次，合成一个「搜索」入口更符合「我要找一本书」的实际动作；再加上统计总览与备份设置，正好五页。阶段 D 的扫码录入、阶段 E 的备份 UI 都挂在这五个页面里，不新增导航项。
 
@@ -121,7 +121,7 @@
 
 ### 11.1 批量导入：列映射预览（P0-1）
 
-- 入口：NewBookPage 的批量导入区，三个入口：「粘贴文本」「CSV 文件」「Excel 文件」。
+- 入口：NewBookPage 的批量导入区，两个入口：「粘贴文本」与「选择文件…」（接受 `.csv/.txt/.md/.tsv/.json/.xlsx/.xls/.docx`，按扩展名分派解析；B4 起）。
 - 文件选择后**不直接写库**：先展示预览表（前 5 行 + 「第 N 列 → 字段」的映射行）；
   映射不正确的列可以用下拉改（含「忽略此列」），确认后执行。
 - 预览区下方是三个批量默认值（下拉/数字控件）：默认值语义以 05 §2.2 为权威——
@@ -181,3 +181,13 @@
      `loanPeriodDays` 折算——默认 30 天，设置页「偏好」区可改），确认即 `lendCopy` 借出。
 - 校验复用 `features/loans/write.ts` 的 `validateLoanDraft`/`lendCopy`，失败显示中文人话，
   不新造一套校验。书目详情页原有的借出弹窗保持不变（快速借出是新增入口，不是替代）。
+
+### 11.8 拍照存封面（B4）
+
+- **入口**：新增书目页与书目详情页各一个「📷 拍照 / 选图」按钮（书目详情页兼「重拍」「删照片」）。
+  手机直接调相机，电脑是选图片文件（`<input type="file" accept="image/*" capture="environment">`）。
+- **压缩**：客户端用 canvas 压到长边 ≤1000px 的 JPEG（约 50–100KB），原始大图不入库。
+- **预览**：选完先显预览，可确认 / 重拍 / 取消；保存时随书入库（先存书目再存封面）。
+- **显示**：详情页大图；搜索页、位置页、首页「最近添加」行首小缩略图（~40px）；**无照片时：详情/新增页显示占位框（📷＋「还没有照片」），列表行不渲染任何占位**（不给每一行加噪音）。
+- **失败态**：图片解不开 / 不是图片 → 人话提示（「这张图读不了，换一张试试」），不影响手填与保存。
+- **概不联网**：照片只进本机 IndexedDB，不上传任何服务；导出备份时才会写进备份文件（02 §3.5）。

@@ -36,6 +36,7 @@
 | 扫码 | html5-qrcode | 浏览器/安卓可用 |
 | 二维码 | qrcode | 生成位置码 |
 | 表格解析 | SheetJS CE（`xlsx`） | 批量导入 .xlsx/.xls（P0-1）；`import('xlsx')` 动态加载，不进首屏包 |
+| 文档解压 | fflate（仅 .docx 解压，B4） | 导入 Word 书单；只解压不算传，动态 `import()` |
 | 元数据 | Open Library + Google Books | 免费，无需 key |
 | 桌面打包 | Tauri 2 | 产物体积小 |
 | 安卓打包 | Capacitor | 复用同一套代码 |
@@ -75,7 +76,7 @@ IndexedDB 会被清理：macOS 的 WKWebView、安卓 WebView 的沙盒重置、
    - Tauri → `appDataDir/backups/*.json`（`@tauri-apps/plugin-fs`）
    - Capacitor → `Directory.Data/backups/`（`@capacitor/filesystem`）
    - 浏览器/PWA → 触发一次下载（或提供「立即备份」按钮），不静默下载
-   快照用的是和手动导出完全相同的格式与代码路径（03 §2），不另造一套序列化；`buildBackup()` 落在 `backup/format.ts`（纯序列化叶子模块，只 import domain），快照与导出都从它拿字符串；落盘由 `src/platform/` 里的宿主适配层做——数据层不认识文件系统。
+   快照用的是和手动导出完全相同的格式与代码路径（03 §2），不另造一套序列化；`buildBackup()` 落在 `backup/export.ts`（序列化与类型在 `backup/format.ts`），快照经 `includeCovers:false` 跳过照片；落盘由 `src/platform/` 里的宿主适配层做——数据层不认识文件系统。
 4. **提醒**：首页显示「上次导出：N 天前」，超过 14 天显示醒目提示。
 
 ### 3.3 写操作与快照计数器
@@ -126,6 +127,7 @@ src/
     loans.ts            借出/归还/历史/逾期
     borrowers.ts        借书人候选（P0-3，02 §5.5）
     snapshots.ts        快照：撤销/自动/恢复（P0-4，02 §12）
+    covers.ts           封面照片增删改查（B4，02 §3.5）
     settings.ts         键值配置
     stats.ts            统计
     repair.ts           不变式检查与修复（导入后 / 启动时）
@@ -133,10 +135,12 @@ src/
     format.ts           文件格式、校验、序列化
     export.ts           导出
     import.ts           预览与合并导入（算法见 03）
-  platform/             宿主适配（扫码、文件落盘、通知、能力探测）
+  platform/             宿主适配（扫码、文件落盘、通知、能力探测、图片压缩）
   features/             UI，按页面分
     books/import.ts     批量粘贴/CSV 解析、跳过规则、批量创建（05 §2）
     books/import-mapping.ts  列名映射与别名词典（05 §2.2）
+    books/import-detect.ts   文本格式探测与 json 解析（B4，05 §2.1）
+    books/docx.ts        Word 书单解析（B4，fflate 动态加载，05 §2.1）
     books/xlsx.ts       xlsx 解析包装（P0-1，动态 import SheetJS，05 §2.1）
     books/ai.ts         AI 提示词拼装与回复解析（05 §3.4）
     books/write.ts      书目表单校验、草稿→实体、保存（04 §5）
@@ -147,7 +151,7 @@ src/
 *.test.ts               与被测文件同目录，由 `npm test` 收集
 ```
 
-**依赖方向是单向的**：`features → db → domain`，`backup → db → domain`，`platform` 只被 `features` 调用。`domain` 不许 import `db`。
+**依赖方向是单向的**：`features → db → domain`，`backup → db → domain`，`platform` 被 `features` 与 `app`（外壳、文案、hooks 这类无业务逻辑处）调用。`domain` 不许 import `db`。
 细化：`db/snapshots.ts` 复用 `backup/format.ts` 的 build 逻辑（`snapshots → format → domain`，不构成环）。
 
 ### 5.1 B3 受影响文件与尺寸标注（2026-09-13 定稿）
@@ -246,6 +250,57 @@ Dexie 在**模块初始化时**捕获 `indexedDB` 全局，而 `locations → sn
 
 ---
 
+### 5.3 B4 受影响文件与尺寸（2026-09-13 设计定稿）
+
+同一套尺寸纪律（>300 拆分审查、>500 必须拆、新增文件 ≤300）。
+
+**新建文件（6 个）**：
+
+| 文件 | 预计行数 | 内容 |
+|---|---|---|
+| `src/db/covers.ts` | ~90 | 封面增删改查（Blob ↔ DataURL，02 §3.5） |
+| `src/db/covers.test.ts` | ~120 | 增删改查 / 一本书一张 / 图像字节一致 |
+| `src/features/books/import-detect.ts` | ~120 | 分隔符探测 + json 解析（05 §2.1） |
+| `src/features/books/import-detect.test.ts` | ~110 | 探测/回退/json 中英字段/非数组报错 |
+| `src/features/books/docx.ts` | ~110 | docx 解压取表与段（fflate 动态加载） |
+| `src/features/books/docx.test.ts` | ~100 | 表格行/段落/空文档 |
+
+**修改文件（约 20 个，关键项）**：`src/db/schema.ts`（v3 +covers，~53）· `src/db/client.ts`（clearAllData 含 covers，~83）·
+`src/db/repair.ts`（I10 孤儿封面，~260）· `src/db/snapshots.ts`（undo 含封面/auto 不含，~260）·
+`src/db/books.ts`（删书目级联封面，~277）· `src/domain/types.ts`（Cover 类型，~181）·
+`src/backup/format.ts`（covers 段序列化/校验，~645，存量 >500 已在拆分项目）·
+`src/backup/import.ts`（合并 covers §4.7，~408）· `src/features/books/write.ts`（删书目捕获封面，~315）·
+`src/features/books/NewBookPage.tsx`（拍照入口，~355）· `BookDetailPage.tsx`（封面显示/重拍，~905）·
+`src/features/search/SearchPage.tsx` / `OverviewPage.tsx`（缩略图，各 +~15）·
+`src/platform/image.ts`（新，图片压缩，~90）· `src/features/books/BulkImportSection.tsx`（多格式入口，~245）·
+`package.json`（fflate 依赖）。
+
+---
+
+### 5.4 B4 实现后实测与偏差（2026-09-13 交付）
+
+实测口径：交付后全量 `npm test` **425/425 通过**（85 套件，B3 基线 343 → B4 +82）、`npm run typecheck` 通过、`npm run build` 成功（`fflate` 独立分包 5.4 kB，主包不含其实现）。
+
+**新建文件实测（12 个，均 ≤300 行）**：`db/covers.ts` 128 · `db/covers.test.ts` 163 ·
+`features/books/import-detect.ts` 218 · `import-detect.test.ts` 182 · `docx.ts` 143 · `docx.test.ts` 110 ·
+`import-source.ts` 280 · `import-text.ts` 59 · `CoverPicker.tsx` 179 · `CoverThumb.tsx` 41 ·
+`platform/image.ts` 153 · `platform/image.test.ts` 155。
+
+**§5.3 未登记但必要的拆分/新增（事后登记）**：`import-source.ts` + `import-text.ts`（`import.ts` 拆分后的一支：涨到 535 行越 500 硬线 → 拆成解析/建库两半，主文件 256 行、调用方零改动）；
+`CoverPicker.tsx` + `CoverThumb.tsx`（拍照→压缩→预览→确认状态机被新增页/详情页共用；缩略图被三处列表共用）；`image.test.ts`、`import-detect.test.ts`、`docx.test.ts`。
+
+**跨 300 行的文件与裁定**：`features/books/NewBookPage.tsx` 338（页面级聚合，拆出 `BulkImportSection`/`CoverPicker` 后仍在 300 上方——留待下一轮按「页面拆分」项目处理）；`features/books/write.ts` 316（同上）；
+`import.test.ts` 317（**接受**：仅超测试文件 300 行目标 17 行，用例同一主题域，拆了反而降低可读性）；
+`LocationsPage.tsx` 728、`BookDetailPage.tsx` 921、`format.ts` 654 —— 存量 >500，已在 §10 大文件拆分项目内。
+
+**需父层知晓的行为裁定（已实现）**：
+- 新增页拍照 + 命中同 ISBN 选择「合并到已有书目」时，新照片**覆盖**目标书目原有封面（`putCover` 是 upsert）。
+- 详情页封面优先级：本机照片 > 旧 `Book.coverUrl` 网络图 > 占位框。
+- 删照片有二次确认（封面不进快照，所以没有 30 秒撤销，确认是唯一防线）。
+- 「拍照/选图」为**文件选择入口**（手机自动调相机）；拖拽入口未做（B3 同形态已验收）。
+
+---
+
 ## 6. 工程硬约束
 
 这些不是风格偏好，是**工具链决定的**——违反会导致测试跑不起来或数据出错。
@@ -302,6 +357,7 @@ npm run typecheck # tsc --noEmit
 | F | PWA：manifest、图标、离线缓存 | 断网仍能打开并检索已有数据 | ✅ 2026-09-12（manifest/三张图标/手写 SW 就位并通过产物检查；部署工作流就位，Q3 已解；真机安装与断网验收待用户执行） |
 | B2 | 批量导入（粘贴/CSV）+ AI 元数据补全（OpenAI 兼容接口自配）+ 界面精致化 | 粘贴一段书单一键建完（重复跳过并报告）；配好外部 AI 后能从书名/ISBN 一键补全元数据；界面质感升级且深浅色正常 | 🔨 2026-09-12 进行中（规范见 05，视觉基调见 04 §10） |
 | B3 | P0 四件套 + N1-N3：批量导入升级（xlsx/列映射/位置副本标签列）、表单记忆、借书人候选、删除撤销 + 库内自动快照（schema v2）、搜索标签筛选、首页最近添加、快速借出 | 拖入 .xlsx 经预览映射一键建书+副本；连录不重选位置品相；借书人下拉自动填；误删 30 秒可撤销，快照可恢复；搜索页可按标签筛选；首页显示最近添加；借出页三步完成借出 | ✅ 2026-09-13 实现交付（规范：02 §5.5/§9.1/§10.3/§12、03 §2/§4.5、04 §11、05 §2；实现行数实测见 §5.1）；npm test 343/343、typecheck、build 全绿；真机验收待用户执行 |
+| B4 | 拍照存封面（本地压缩入库、进备份不进快照）+ 多格式导入（文本类 .txt/.md/.tsv/.json + Word .docx） | 手机上拍照直接存为封面、详情/列表显示缩略图；`.txt/.json/.tsv/.docx` 选择文件即导入，预览可改列映射；测试全绿 | ✅ 2026-09-13 实现交付（规范：02 §3.5/§6 I10/§8 v3、03 §2/§4.7、04 §11.8、05 §2.1；实测见 §5.4）；npm test 425/425、typecheck、build 全绿；真机验收待用户执行 |
 | G | Tauri 桌面打包 | 产出安装包；**真机验证 `crypto.randomUUID` 是否存在并记录结论** |
 | H | Capacitor 安卓打包 | 产出 APK；相机权限可用；`androidScheme: 'https'` 已配置 |
 | I | 实测：录 50–100 本真实书 | 走完录入→找书→借出→归还→导出→导入全流程 |

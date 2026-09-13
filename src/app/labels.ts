@@ -11,6 +11,7 @@ import type { DeleteLocationStrategy } from '../db/locations.ts';
 import type { ImportField } from '../features/books/import-mapping.ts';
 import { joinList } from '../domain/text.ts';
 import { daysSince, isTimestampString, toLocalDate, today } from '../domain/time.ts';
+import { COVER_READ_FAILED } from '../platform/image.ts';
 import type {
   Book,
   CopyCondition,
@@ -224,4 +225,40 @@ export function importSummaryRows(summary: ImportSummary): SummaryRow[] {
     rows.push({ label: '重名位置', value: joinList(summary.locations.conflictingNames) });
   }
   return rows;
+}
+
+/* ------------------------------------------------------------------ *
+ * 封面照片（04 §11.8）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 封面区的全部文案：新增页与详情页共用同一套说法，
+ * 免得同一个动作在两处叫两个名字（04 §5「一处定义」）。
+ */
+export const COVER_LABELS = {
+  /** 入口按钮（04 §11.8 的原文，两个页面一致） */
+  capture: '📷 拍照 / 选图',
+  /** 已经有照片时的入口：同一个动作（04 §11.8 详情页的「重拍」） */
+  replace: '更换照片',
+  /** 预览上的三个动作（04 §11.8：可确认 / 重拍 / 取消） */
+  confirm: '用这张',
+  retake: '重拍',
+  cancel: '取消',
+  /** 删照片：详情页是「删除照片」，新增页只是丢掉刚选的那张 */
+  remove: '删除照片',
+  removePending: '不用这张',
+  removeConfirmTitle: '删除封面照片',
+  removeConfirmMessage: '照片只在本机，删掉就找不回来了；之后随时可以重拍一张。',
+  empty: '还没有照片',
+  compressing: '正在压缩…',
+  hint: '照片只存这台设备，不会上传。',
+  /** 解不开的图由 platform/image.ts 抛出（04 §11.8 失败态），这里转发一次让页面只读 labels */
+  readFailed: COVER_READ_FAILED,
+  /** 书目存好了、封面却没写进去时的开头一句（新增页保存流程用） */
+  saveFailed: '封面照片没能存进去',
+} as const;
+
+/** 封面图的 alt：读屏听到的是「《三体》的封面照片」。 */
+export function coverPhotoAlt(title: string): string {
+  return `${title} 的封面照片`;
 }

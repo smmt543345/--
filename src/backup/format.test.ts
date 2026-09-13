@@ -226,7 +226,7 @@ describe('备份文件解析（03 §3）', () => {
     if (!result.ok) return;
     assert.equal(result.backup.data.books.length, 1);
     assert.ok(result.warnings.some((w) => w.includes('books') && w.includes('99')));
-    assert.deepEqual(result.backup.counts, { locations: 0, books: 1, copies: 0, loans: 0, borrowers: 0 });
+    assert.deepEqual(result.backup.counts, { locations: 0, books: 1, copies: 0, loans: 0, borrowers: 0, covers: 0 });
   });
 
   it('缺失的数据段按空列表处理并警告', () => {
@@ -235,6 +235,84 @@ describe('备份文件解析（03 §3）', () => {
     if (!result.ok) return;
     assert.deepEqual(result.backup.data.locations, []);
     assert.ok(result.warnings.some((w) => w.includes('缺少 locations')));
+  });
+
+  it('封面段：老文件没有 covers 段 → 视为空数组且不警告（03 §3.1）', () => {
+    const result = parseBackup(backupText({}));
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.deepEqual(result.backup.data.covers, []);
+    assert.equal(result.backup.counts.covers, 0);
+    assert.deepEqual(result.warnings, [], '缺 covers 段是早期版本文件的正常形态，不是损坏');
+  });
+
+  it('封面段：只留显式字段；缺 bookId 或缺图片数据的记录丢弃并说清原因', () => {
+    const result = parseBackup(
+      backupText({
+        covers: [
+          {
+            bookId: 'b1',
+            mime: 'image/jpeg',
+            dataUrl: 'data:image/jpeg;base64,AQID',
+            createdAt: STAMP,
+            updatedAt: STAMP,
+            未知字段: '不该留下',
+          } as never,
+          { mime: 'image/jpeg', dataUrl: 'data:image/jpeg;base64,AQID' } as never,
+          // 图片本身就是这条记录的全部内容，没有「默认值」可补 —— 宁可报告也不造假图（§3.1）
+          { bookId: 'b3', dataUrl: '这不是 data URL' } as never,
+        ],
+      }),
+    );
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+
+    assert.equal(result.backup.data.covers.length, 1);
+    const cover = result.backup.data.covers[0];
+    assert.equal(cover?.bookId, 'b1');
+    assert.equal(cover?.dataUrl, 'data:image/jpeg;base64,AQID');
+    assert.deepEqual(Object.keys(cover ?? {}).sort(), ['bookId', 'createdAt', 'dataUrl', 'mime', 'updatedAt']);
+    assert.ok(result.warnings.some((w) => w.includes('缺少 bookId')));
+    assert.ok(result.warnings.some((w) => w.includes('图片数据') && w.includes('b3')));
+  });
+
+  it('封面段：mime 缺失按 image/jpeg 补齐，时间戳缺失用导出时间兜底，两者都要提示', () => {
+    const result = parseBackup(
+      backupText({ covers: [{ bookId: 'b1', dataUrl: 'data:image/jpeg;base64,AQID' } as never] }),
+    );
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.backup.data.covers[0]?.mime, 'image/jpeg');
+    assert.equal(result.backup.data.covers[0]?.createdAt, STAMP);
+    for (const expected of ['封面（书目 b1） 缺少字段 mime', 'createdAt 缺失或不是时间戳', 'updatedAt 缺失或不是时间戳']) {
+      assert.ok(result.warnings.some((w) => w.includes(expected)), `缺少提示：${expected}`);
+    }
+  });
+
+  it('序列化：封面按 bookId 升序，往返逐字节一致', () => {
+    const wire = (bookId: string, payload: string): never =>
+      ({
+        bookId,
+        mime: 'image/jpeg',
+        dataUrl: `data:image/jpeg;base64,${payload}`,
+        createdAt: STAMP,
+        updatedAt: STAMP,
+      }) as never;
+    const backup = parseOk(backupText({ covers: [wire('b2', 'AgID'), wire('b1', 'AQID')] }));
+
+    assert.deepEqual(
+      backup.data.covers.map((c) => c.bookId),
+      ['b2', 'b1'],
+      '解析保持文件里的顺序，重排只发生在序列化时',
+    );
+    const once = serializeBackup(backup);
+    const shuffled: BackupFile = {
+      ...backup,
+      data: { ...backup.data, covers: [...backup.data.covers].reverse() },
+    };
+    assert.equal(serializeBackup(shuffled), once, '同一份数据的导出结果与数组顺序无关');
+    assert.deepEqual(parseOk(once).data.covers.map((c) => c.bookId), ['b1', 'b2']);
+    assert.equal(serializeBackup(parseOk(once)), once, '往返后再导出必须字节完全相同');
   });
 
   it('序列化稳定：同一份数据两次导出字节一致，且与数组顺序无关', () => {

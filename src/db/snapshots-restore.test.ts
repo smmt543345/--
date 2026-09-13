@@ -15,12 +15,21 @@ import { createCopy, deleteCopy } from './copies.ts';
 import { createLocation } from './locations.ts';
 import { loanOut } from './loans.ts';
 import { createBorrower, deleteBorrower } from './borrowers.ts';
+import { putCover } from './covers.ts';
 import { repairInvariants } from './repair.ts';
 import { SETTING_KEYS, getSetting, setSetting } from './settings.ts';
 import { captureSnapshot, listSnapshots, restoreSnapshot, whenAutoSnapshotSettled } from './snapshots.ts';
 
 const byId = <T extends { id: string }>(rows: readonly T[]): T[] =>
   [...rows].sort((a, b) => a.id.localeCompare(b.id));
+
+function jpeg(...bytes: number[]): Blob {
+  return new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' });
+}
+
+async function bytesOf(blob: Blob): Promise<number[]> {
+  return [...new Uint8Array(await blob.arrayBuffer())];
+}
 
 describe('自动快照（02 §12.3）', () => {
   it('S7 写计数达 20 且距上次 ≥1 天 → 自动拍 auto 快照；计数器归零', async () => {
@@ -149,6 +158,47 @@ describe('快照恢复（02 §12.4）', () => {
 
       assert.equal(await db.snapshots.where('kind').equals('undo').count(), 0, '恢复前先清理当前 undo');
       assert.ok(await db.copies.get(copy.id), '恢复结果 = 快照内容（含被删的副本），不受 undo 影响');
+    });
+  });
+
+  it('S22 快照回滚不动封面表（B4）：auto/pre-restore 的 data 不含 covers，恢复后照片仍在', async () => {
+    await withDb(async (db) => {
+      const book = await createBook(db, { title: '书' });
+      await putCover(db, { bookId: book.id, blob: jpeg(7, 7, 7), mime: 'image/jpeg' });
+
+      const snapshot = await captureSnapshot(db, 'auto', '2026-09-13T00:00:00.000Z');
+      assert.equal(snapshot.data.covers, undefined, 'auto 快照不复制照片（10 份各存一遍会翻十倍）');
+      // 落库的那一份也要查 —— 只看返回值会让「存进去了、返回时被剥掉」这种漏网
+      const stored = await db.snapshots.get(snapshot.id);
+      assert.equal(stored?.data.covers, undefined);
+      assert.deepEqual(await db.covers.count(), 1, '拍照本身不进快照，照片还在库里');
+
+      await restoreSnapshot(db, snapshot.id, '2026-09-13T01:00:00.000Z');
+
+      const pre = await db.snapshots.where('kind').equals('pre-restore').toArray();
+      assert.equal(pre[0]?.data.covers, undefined, 'pre-restore 同样不带封面');
+      const kept = await db.covers.get(book.id);
+      assert.ok(kept, '恢复语义只覆盖业务表，不动封面表（02 §12.4）');
+      assert.deepEqual(await bytesOf(kept.blob), [7, 7, 7], '照片字节不受恢复影响');
+    });
+  });
+
+  it('快照恢复后：被恢复掉的书目留下的封面由 I10 收走（B4）', async () => {
+    await withDb(async (db) => {
+      const kept = await createBook(db, { title: '快照里的书' });
+      const snapshot = await captureSnapshot(db, 'auto', '2026-09-13T00:00:00.000Z');
+
+      const added = await createBook(db, { title: '快照之后加的书' });
+      await putCover(db, { bookId: added.id, blob: jpeg(1, 2), mime: 'image/jpeg' });
+      await putCover(db, { bookId: kept.id, blob: jpeg(3, 4), mime: 'image/jpeg' });
+
+      await restoreSnapshot(db, snapshot.id, '2026-09-13T01:00:00.000Z');
+
+      assert.equal(await db.books.get(added.id), undefined, '恢复 = 回到快照那一刻');
+      assert.equal(await db.covers.get(added.id), undefined, '它那张照片成了孤儿，由 I10 收走（02 §3.5）');
+      const survivor = await db.covers.get(kept.id);
+      assert.ok(survivor, '快照里那本书的封面不受影响');
+      assert.deepEqual(await bytesOf(survivor.blob), [3, 4]);
     });
   });
 });

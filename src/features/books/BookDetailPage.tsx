@@ -15,6 +15,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 
 import { useDb } from '../../app/db-context.ts';
 import {
+  COVER_LABELS,
   COPY_CONDITION_LABELS,
   COPY_STATUS_LABELS,
   LOAN_STATUS_LABELS,
@@ -44,6 +45,7 @@ import {
 } from '../../app/ui.tsx';
 import { useAsyncAction, useLiveQuery } from '../../app/useLiveQuery.ts';
 import { findBooksByIsbn, getBookDetail, updateBook } from '../../db/books.ts';
+import { deleteCover, getCover, putCover } from '../../db/covers.ts';
 import {
   MANUAL_COPY_STATUSES,
   createCopy,
@@ -63,9 +65,12 @@ import type {
   CopyCondition,
   CopyStatus,
   CopyWithLocation,
+  Cover,
   Location,
 } from '../../domain/types.ts';
+import type { CompressedImage } from '../../platform/image.ts';
 import { BorrowForm } from './BorrowForm.tsx';
+import { CoverPicker } from './CoverPicker.tsx';
 import {
   EMPTY_DRAFT,
   MAX_INITIAL_COUNT,
@@ -225,6 +230,7 @@ export function BookDetailPage(): ReactNode {
   const bookAction = useAsyncAction(); // 书目本身：保存编辑、删除整本
   const copyAction = useAsyncAction(); // 副本卡片上的即时改动：位置 / 品相 / 状态
   const dialogAction = useAsyncAction(); // 对话框里的写操作：借出 / 归还 / 删副本 / 加副本
+  const coverAction = useAsyncAction(); // 封面照片：拍、换、删
 
   // null = 还没拿到第一份结果；undefined = 查过了，没有这本书
   const detail = useLiveQuery<BookDetail | null | undefined>(
@@ -233,11 +239,13 @@ export function BookDetailPage(): ReactNode {
     null,
   );
   const locations = useLiveQuery<Location[]>(async () => listLocations(db), [db], []);
+  // 封面照片（04 §11.8）：一本书一张，按 bookId 取那一张
+  const cover = useLiveQuery<Cover | null>(async () => (await getCover(db, bookId)) ?? null, [db, bookId], null);
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<BookDraft>(EMPTY_DRAFT);
   const [formError, setFormError] = useState<string | null>(null);
-  const [coverFailedUrl, setCoverFailedUrl] = useState('');
+  const [coverDeleteOpen, setCoverDeleteOpen] = useState(false);
   // 编辑保存时的同 ISBN 提示：第一次点保存先提示，用户知情后再点一次才真的写（与新增入口同一口径）
   const [isbnConflictNotice, setIsbnConflictNotice] = useState<string | null>(null);
 
@@ -289,8 +297,8 @@ export function BookDetailPage(): ReactNode {
   const borrowers = [
     ...new Set(borrowedCopies.map((copy) => copy.activeLoan?.borrower ?? '（未知借书人）')),
   ];
-  // 封面加载失败就换掉，不留破图；换了 coverUrl 之后自然重试
-  const coverVisible = book.coverUrl !== '' && coverFailedUrl !== book.coverUrl;
+  // 本机照片（04 §11.8）优先显示；形状与入库时一致，页面直接映射过去
+  const coverImage: CompressedImage | null = cover === null ? null : { blob: cover.blob, mime: cover.mime };
   const loanCountOf = (copyId: string): number => loans.filter((loan) => loan.copyId === copyId).length;
 
   /* ---------------- 书目元数据 ---------------- */
@@ -345,6 +353,33 @@ export function BookDetailPage(): ReactNode {
       setEditing(false);
     });
   }
+
+  /* ---------------- 封面照片（04 §11.8） ---------------- */
+
+  function saveCover(image: CompressedImage): void {
+    void coverAction.run(async () => {
+      // 重拍＝覆盖同一行（02 §3.5：一本书一张，bookId 是主键）
+      await putCover(db, { bookId, blob: image.blob, mime: image.mime });
+    });
+  }
+
+  function openDeleteCover(): void {
+    coverAction.clearError();
+    setCoverDeleteOpen(true);
+  }
+
+  function closeDeleteCover(): void {
+    setCoverDeleteOpen(false);
+    coverAction.clearError();
+  }
+
+  function confirmDeleteCover(): void {
+    void coverAction.run(async () => {
+      await deleteCover(db, bookId);
+      setCoverDeleteOpen(false);
+    });
+  }
+
 
   /* ---------------- 副本上的即时改动 ---------------- */
 
@@ -598,22 +633,31 @@ export function BookDetailPage(): ReactNode {
         </Card>
       ) : (
         <Card className="space-y-3 p-4">
-          <div className="flex gap-4">
-            {coverVisible && (
-              <img
-                src={book.coverUrl}
-                alt={`${bookDisplayTitle(book)} 的封面`}
-                onError={() => setCoverFailedUrl(book.coverUrl)}
-                className="h-36 w-24 shrink-0 rounded-lg border border-neutral-200 object-cover dark:border-neutral-800"
-              />
-            )}
-            <dl className="min-w-0 flex-1 space-y-1.5 text-sm">
+          <div className="flex flex-wrap gap-4">
+            {/* 封面照片（04 §11.8）：本机照片优先，其次退回封面图 URL，都没有就是占位框 */}
+            <CoverPicker
+              title={bookDisplayTitle(book)}
+              current={coverImage}
+              onConfirm={saveCover}
+              onDelete={openDeleteCover}
+              pending={coverAction.pending}
+              fallbackUrl={book.coverUrl}
+              size="lg"
+            />
+            <dl className="min-w-[12rem] flex-1 space-y-1.5 text-sm">
               <MetaRow label="作者" value={authorsText(book.authors)} />
               <MetaRow label="ISBN" value={book.isbn === '' ? '未填' : book.isbn} />
               <MetaRow label="出版社" value={book.publisher === '' ? '未填' : book.publisher} />
               <MetaRow label="出版日期" value={book.publishDate === '' ? '未填' : book.publishDate} />
             </dl>
           </div>
+
+          {/* 删除确认框自己会显示同一条错误，这里不重复渲染一遍 */}
+          {coverAction.error !== null && !coverDeleteOpen && (
+            <Banner tone="red" onClose={coverAction.clearError}>
+              {coverAction.error}
+            </Banner>
+          )}
 
           <div>
             <p className="mb-1 text-xs text-neutral-400 dark:text-neutral-500">标签</p>
@@ -699,6 +743,18 @@ export function BookDetailPage(): ReactNode {
           })
         )}
       </section>
+
+      {/* 删照片是删数据、且撤不回来（快照不含封面，02 §12.1），所以先问一句 */}
+      <ConfirmDialog
+        open={coverDeleteOpen}
+        title={COVER_LABELS.removeConfirmTitle}
+        confirmLabel={COVER_LABELS.remove}
+        pending={coverAction.pending}
+        error={coverAction.error}
+        message={COVER_LABELS.removeConfirmMessage}
+        onCancel={closeDeleteCover}
+        onConfirm={confirmDeleteCover}
+      />
 
       <Modal
         open={lendTarget !== null}

@@ -26,13 +26,14 @@
   "schemaVersion": 2,                  // 导出时的 Dexie schema 版本（02 §8.1）
   "exportedAt": "2026-09-11T11:39:52.000Z",
   "deviceName": "我的笔记本",            // 仅用于摘要展示，导入时忽略
-  "counts": { "locations": 12, "books": 86, "copies": 91, "loans": 24, "borrowers": 6 },
+  "counts": { "locations": 12, "books": 86, "copies": 91, "loans": 24, "borrowers": 6, "covers": 61 },
   "data": {
     "locations": [ /* Location[] */ ],
     "books":     [ /* Book[] */ ],
     "copies":    [ /* Copy[] */ ],
     "loans":     [ /* Loan[] */ ],
-    "borrowers": [ /* Borrower[]，P0-3 新增段；02 §5.5 */ ]
+    "borrowers": [ /* Borrower[]，P0-3 新增段；02 §5.5 */ ],
+    "covers":    [ /* Cover[]，B4 新增段：{ bookId, mime, dataUrl(base64), createdAt, updatedAt }，02 §3.5 */ ]
   }
 }
 ```
@@ -40,6 +41,8 @@
 **不导出 `settings` 与快照（snapshots）。** 理由：里面是「本机偏好 + 快照计数 + 上次导出时间 + 快照数据」这类设备专属状态，导入别人的只会制造混乱；快照与备份的分工见 02 §12.5。需要跨设备带走的配置项（如二维码基址）在后续版本里单独做白名单（§6）。
 
 **`data.borrowers` 是 P0-3 新增段**：借书人候选是业务数据（换设备不丢）；老版本备份文件没有该段（见 §3.1 容错）。
+
+**`data.covers` 是 B4 新增段**：封面照片以 base64 data URL 存——**记录带 `createdAt`/`updatedAt` 时间戳**（§4.7 的 LWW 与 §8 的幂等靠它判定，缺了就分不出新旧）；换设备封面不丢；代价是备份文件会变大（约 50–100KB/张，100 本书约多 5–10MB）。
 
 ### 2.1 示例（最小可用文件）
 
@@ -84,10 +87,11 @@
 | `schemaVersion` 是数字且 `<= 当前 schema 版本` | 同上，文案提示是数据版本更新 |
 | `data` 是对象且 `locations`/`books`/`copies`/`loans` 四个数组存在 | 「备份文件缺少必要的数据段」 |
 | `data.borrowers` 缺失 | **不报错**：老版本（schemaVersion 1）文件正常，视为空数组（§3.1） |
+| `data.covers` 缺失 | **不报错**：B4 之前的文件没有该段，视为空数组（§3.1） |
 
 ### 3.1 容错原则：宽进严出
 
-- **数组缺失**视为空数组（继续导入，记警告），不直接失败——用户手改过文件也应当能救回数据。**例外：`data.borrowers` 缺失视为空数组且不警告**——那是 schemaVersion 1 的老文件，正常形态不是损坏。
+- **数组缺失**视为空数组（继续导入，记警告），不直接失败——用户手改过文件也应当能救回数据。**例外：`data.borrowers` 与 `data.covers` 缺失视为空数组且不警告**——那是早期版本的老文件，正常形态不是损坏。
 - **单条记录缺字段**：用 02 的默认值补全（空串 / `[]` / `unknown` / 导出时间），记警告，**逐字段提示**（「书目 b1 缺少字段 publisher，已按空串导入」）。判据是「文件里根本没有这个字段」——空串 / 空数组是用户显式写下的值，不算缺字段。`createdAt` / `updatedAt` 缺失或非法同样补齐并提示：用户看到的时间要是编出来的，他必须知道。
 - **只有 `id` 缺失或不是非空字符串才丢弃该条**，并记警告。`bookId`（副本）/ `copyId`（借出）缺失同样在清洗阶段丢弃该条并记警告——引用字段缺了，这条记录没有可落地的含义（§4.3、§4.4 对「指向不存在的对象」是同样的处理）。
 - **未知字段直接忽略**（不写入数据库），这样未来版本加字段不会污染老版本。
@@ -116,8 +120,9 @@ applyImport(backup, { mode }):
   6. 合并 copies，用 idRemap 重指向（§4.3）
   7. 合并 loans，做冲突裁定（§4.4）
   8. 合并 borrowers（§4.5）
-  9. 修复通道：rebuildLocationPaths() + repairInvariants()（02 §6）
-  10. 统计变更计数，返回摘要（§7）
+  9. 合并 covers（§4.7）
+  10. 修复通道：rebuildLocationPaths() + repairInvariants()（02 §6）
+  11. 统计变更计数，返回摘要（§7）
 ```
 
 ### 4.1 位置
@@ -219,7 +224,18 @@ idRemap: Map<传入书目的 id, 本地书目的 id>
 
 ---
 
-## 5. 字段级合并规则
+### 4.7 封面（B4）
+
+```
+对每条传入封面 C（主键即 bookId）：
+  目标书目 = idRemap.get(C.bookId) ?? C.bookId
+  若目标书目在本地不存在 → 丢弃该封面，统计 skipped，记警告
+  本地已有同 bookId → 字段级合并（§5.1，LWW；dataUrl 变则 updated）
+  本地没有 → 插入
+```
+
+封面按 `bookId` 对齐（一本书一张），无 ISBN 类跨设备合并场景。
+base64 dataUrl 不做内容比较——直接按 `updatedAt` LWW（相同内容重复导入时 `changed=false`，幂等）。
 
 ### 5.1 `mergeRecord(local, incoming)`
 
@@ -271,6 +287,7 @@ interface ImportSummary {
   copies:    { inserted: number; updated: number; skipped: number; relocated: number };
   loans:     { inserted: number; updated: number; skipped: number; conflicts: number };
   borrowers: { inserted: number; updated: number };   // P0-3
+  covers:    { inserted: number; updated: number; skipped: number };   // B4（02 §3.5）
   warnings:  string[];        // 人话，可直接展示给用户
   durationMs: number;
 }
@@ -328,3 +345,5 @@ interface ImportSummary {
 | T19 | `replace` 模式 | 本地借书人被清空；文件中的借书人完整导入（P0-3） |
 | T20 | 传入借出指向的副本不存在（本地与文件里都没有） | 该借出被跳过并有警告；无 I3 违规；摘要 `skipped` 计数正确 |
 | T21 | replace 导入前存在未过期 undo 快照 | 导入后该 undo 快照被清理；导入结果不受影响 |
+| T22 | 封面往返（B4） | 导出含 covers；再导入后封面 base64 一致 |
+| T23 | 封面指向不存在的书目（B4） | 该封面被跳过并有警告；无 I10 违规 |

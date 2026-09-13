@@ -39,6 +39,7 @@ import { searchBooks, type SearchBooksOptions } from '../../db/books.ts';
 import { listLocations } from '../../db/locations.ts';
 import { listAllTags } from '../../db/listing.ts';
 import { COPY_STATUSES, type BookSearchResult, type CopyStatus, type CopyWithLocation, type Location } from '../../domain/types.ts';
+import { CoverThumb } from '../books/CoverThumb.tsx';
 
 /** 一屏放不下的结果没有意义；超了就让用户细化关键词（service 的 limit）。 */
 const RESULT_LIMIT = 50;
@@ -81,58 +82,62 @@ function ResultRow({ result }: { result: BookSearchResult }): ReactNode {
     <Card>
       <Link
         to={`/books/${book.id}`}
-        className="block min-h-11 p-3 hover:bg-neutral-50 dark:hover:bg-neutral-800/60"
+        className="flex min-h-11 gap-3 p-3 hover:bg-neutral-50 dark:hover:bg-neutral-800/60"
       >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="truncate font-medium">{bookDisplayTitle(book)}</p>
-            <p className="mt-0.5 text-sm text-neutral-500 dark:text-neutral-400">{authorsText(book.authors)}</p>
+        {/* 行首缩略图（04 §11.8）：没有照片时这个组件什么都不渲染，行不会多出一块空格 */}
+        <CoverThumb bookId={book.id} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate font-medium">{bookDisplayTitle(book)}</p>
+              <p className="mt-0.5 text-sm text-neutral-500 dark:text-neutral-400">{authorsText(book.authors)}</p>
+            </div>
+            <Badge tone="gray">{copies.length} 本</Badge>
           </div>
-          <Badge tone="gray">{copies.length} 本</Badge>
+
+          <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+            {book.isbn !== '' ? `ISBN ${book.isbn}` : '无 ISBN'}
+            {book.publisher !== '' && ` · ${book.publisher}`}
+          </p>
+
+          {book.tags.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {book.tags.map((tag) => (
+                <Badge key={tag} tone="gray">
+                  {tag}
+                </Badge>
+              ))}
+            </div>
+          )}
+
+          {rows.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {rows.map(({ status, count }) => (
+                <Badge key={status} tone={copyStatusTone(status)}>
+                  {COPY_STATUS_LABELS[status]} {count}
+                </Badge>
+              ))}
+            </div>
+          )}
+
+          {copies.length === 0 && (
+            <p className="mt-1.5 text-xs text-neutral-400 dark:text-neutral-500">还没有实体副本，进详情页添加一本</p>
+          )}
+
+          {paths !== '' && <p className="mt-1.5 text-xs text-neutral-500 dark:text-neutral-400">位置：{paths}</p>}
+
+          {/* 命中字段用中性色：绿/琥珀/红已被副本状态占用（copyStatusTone），别混用 */}
+          {matched.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1">
+              <span className="text-xs text-neutral-500 dark:text-neutral-400">命中：</span>
+              {matched.map((field) => (
+                <Badge key={field} tone="gray">
+                  {MATCH_FIELD_LABELS[field]}
+                </Badge>
+              ))}
+            </div>
+          )}
         </div>
-
-        <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-          {book.isbn !== '' ? `ISBN ${book.isbn}` : '无 ISBN'}
-          {book.publisher !== '' && ` · ${book.publisher}`}
-        </p>
-
-        {book.tags.length > 0 && (
-          <div className="mt-1.5 flex flex-wrap gap-1">
-            {book.tags.map((tag) => (
-              <Badge key={tag} tone="gray">
-                {tag}
-              </Badge>
-            ))}
-          </div>
-        )}
-
-        {rows.length > 0 && (
-          <div className="mt-1.5 flex flex-wrap gap-1">
-            {rows.map(({ status, count }) => (
-              <Badge key={status} tone={copyStatusTone(status)}>
-                {COPY_STATUS_LABELS[status]} {count}
-              </Badge>
-            ))}
-          </div>
-        )}
-
-        {copies.length === 0 && (
-          <p className="mt-1.5 text-xs text-neutral-400 dark:text-neutral-500">还没有实体副本，进详情页添加一本</p>
-        )}
-
-        {paths !== '' && <p className="mt-1.5 text-xs text-neutral-500 dark:text-neutral-400">位置：{paths}</p>}
-
-        {/* 命中字段用中性色：绿/琥珀/红已被副本状态占用（copyStatusTone），别混用 */}
-        {matched.length > 0 && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-1">
-            <span className="text-xs text-neutral-500 dark:text-neutral-400">命中：</span>
-            {matched.map((field) => (
-              <Badge key={field} tone="gray">
-                {MATCH_FIELD_LABELS[field]}
-              </Badge>
-            ))}
-          </div>
-        )}
       </Link>
     </Card>
   );

@@ -21,6 +21,7 @@ import {
   type LocationType,
 } from '../domain/types.ts';
 import { SCHEMA_VERSION } from '../db/schema.ts';
+import { isBase64DataUrl } from '../db/covers.ts';
 
 export const BACKUP_FORMAT = 'pocket-library-backup';
 export const BACKUP_FORMAT_VERSION = 1;
@@ -31,6 +32,20 @@ export interface BackupCounts {
   copies: number;
   loans: number;
   borrowers: number;
+  covers: number;
+}
+
+/**
+ * 封面在备份文件里的形态（03 §2）：拍照存的是 Blob，而 JSON 装不下二进制，
+ * 所以以 base64 data URL 表示；`createdAt`/`updatedAt` 一并带上 ——
+ * §4.7 的字段级合并（LWW）与 §8 的幂等都靠它，不带时间戳就无法判断谁更新。
+ */
+export interface BackupCover {
+  bookId: string;
+  mime: string;
+  dataUrl: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface BackupData {
@@ -40,6 +55,8 @@ export interface BackupData {
   loans: Loan[];
   /** P0-3 新增段（02 §5.5）；老文件缺省视为空数组（§3.1） */
   borrowers: Borrower[];
+  /** B4 新增段（02 §3.5）；老文件缺省视为空数组且不警告（§3.1） */
+  covers: BackupCover[];
 }
 
 export interface BackupFile {
@@ -70,6 +87,8 @@ export interface ImportSummary {
   loans: { inserted: number; updated: number; skipped: number; conflicts: number };
   /** P0-3（02 §5.5） */
   borrowers: { inserted: number; updated: number };
+  /** B4（02 §3.5、03 §4.7） */
+  covers: { inserted: number; updated: number; skipped: number };
   /** 人话，可直接展示给用户；每一条都说明"是哪条、为什么" */
   warnings: string[];
   durationMs: number;
@@ -256,6 +275,8 @@ const BORROWER_FIELDS: readonly MissingFieldRule[] = [
   ['name', '已按空串导入'],
   ['contact', '已按空串导入'],
 ];
+
+const COVER_FIELDS: readonly MissingFieldRule[] = [['mime', '已按默认值（image/jpeg）导入']];
 
 /**
  * 缺字段提示（03 §3.1）：单条记录缺字段要按 02 的默认值补全，**并且记警告**。
@@ -448,6 +469,32 @@ function sanitizeBorrower(raw: unknown, ctx: SanitizeContext): Borrower | null {
   return { id, name: asString(row['name']), contact: asString(row['contact']), createdAt, updatedAt };
 }
 
+/**
+ * 封面清洗（03 §3.1）。与其他实体不同的一点：**图片本身就是这条记录的全部内容**，
+ * 缺了它没有"默认值"可补 —— 造一张 0 字节的空图比报告出来更糟，所以直接丢弃并说清原因。
+ */
+function sanitizeCover(raw: unknown, ctx: SanitizeContext): BackupCover | null {
+  if (raw === null || typeof raw !== 'object') {
+    ctx.warn('封面列表中存在非对象记录，已跳过');
+    return null;
+  }
+  const row = raw as Record<string, unknown>;
+  if (!isValidId(row['bookId'])) {
+    ctx.warn('封面记录缺少 bookId，已丢弃该条');
+    return null;
+  }
+  const bookId = row['bookId'] as string;
+  const dataUrl = asString(row['dataUrl']);
+  if (!isBase64DataUrl(dataUrl)) {
+    ctx.warn(`封面（书目 ${bookId}）缺少可用的图片数据（dataUrl），已丢弃该条`);
+    return null;
+  }
+  warnMissingFields(ctx, `封面（书目 ${bookId}）`, row, COVER_FIELDS);
+  const { createdAt, updatedAt } = sanitizeTimestamps(ctx, `封面（书目 ${bookId}）`, row);
+  // v1 只收 JPEG（02 §3.5）：mime 缺失时按它补，而不是把图片名不清不楚地存下来
+  return { bookId, mime: asString(row['mime']) || 'image/jpeg', dataUrl, createdAt, updatedAt };
+}
+
 function sanitizeArray<T>(
   value: unknown,
   field: string,
@@ -543,6 +590,9 @@ export function parseBackup(text: string): ParseResult {
     sections['borrowers'] === undefined
       ? []
       : sanitizeArray(sections['borrowers'], 'borrowers', context, sanitizeBorrower);
+  // 同理，schemaVersion ≤ 2 的老文件没有 covers 段 —— 视为空数组且**不警告**
+  const covers =
+    sections['covers'] === undefined ? [] : sanitizeArray(sections['covers'], 'covers', context, sanitizeCover);
 
   // counts 只作人工核对，与内容不符时提示（导入本身以内容为准，见 §3.2）
   const actual = {
@@ -551,8 +601,9 @@ export function parseBackup(text: string): ParseResult {
     copies: copies.length,
     loans: loans.length,
     borrowers: borrowers.length,
+    covers: covers.length,
   };
-  for (const key of ['locations', 'books', 'copies', 'loans', 'borrowers'] as const) {
+  for (const key of ['locations', 'books', 'copies', 'loans', 'borrowers', 'covers'] as const) {
     const declared = countOf(key);
     if (declared !== 0 && declared !== actual[key]) {
       warnings.add(`备份文件声明的 ${key} 数量（${declared}）与实际内容（${actual[key]}）不一致，已以内容为准`);
@@ -566,16 +617,18 @@ export function parseBackup(text: string): ParseResult {
     exportedAt,
     deviceName: asString(file['deviceName']),
     counts: actual,
-    data: { locations, books, copies, loans, borrowers },
+    data: { locations, books, copies, loans, borrowers, covers },
   };
 
   return { ok: true, backup, warnings: warnings.list() };
 }
 
-/** 稳定序列化：数组按 id 升序，便于同一份数据多次导出后比对。 */
+/** 稳定序列化：数组按 id 升序（封面按 bookId），便于同一份数据多次导出后比对。 */
 export function serializeBackup(backup: BackupFile): string {
   const byId = <T extends { id: string }>(rows: readonly T[]): T[] =>
     [...rows].sort((a, b) => a.id.localeCompare(b.id));
+  const byBookId = (rows: readonly BackupCover[]): BackupCover[] =>
+    [...rows].sort((a, b) => a.bookId.localeCompare(b.bookId));
 
   return `${JSON.stringify(
     {
@@ -591,6 +644,7 @@ export function serializeBackup(backup: BackupFile): string {
         copies: byId(backup.data.copies),
         loans: byId(backup.data.loans),
         borrowers: byId(backup.data.borrowers),
+        covers: byBookId(backup.data.covers),
       },
     },
     null,

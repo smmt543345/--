@@ -8,10 +8,10 @@
  */
 
 import Dexie, { type Table } from 'dexie';
-import type { Book, Borrower, Copy, Loan, Location, Setting, Snapshot } from '../domain/types.ts';
+import type { Book, Borrower, Copy, Cover, Loan, Location, Setting, Snapshot } from '../domain/types.ts';
 
 /** 当前 schema 版本，导出备份时要写进文件（03 §2）。 */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const DB_NAME = 'pocket-library';
 
@@ -21,6 +21,7 @@ export class PocketLibraryDb extends Dexie {
   copies!: Table<Copy, string>;
   loans!: Table<Loan, string>;
   borrowers!: Table<Borrower, string>;
+  covers!: Table<Cover, string>;
   snapshots!: Table<Snapshot, string>;
   settings!: Table<Setting, string>;
 
@@ -41,6 +42,11 @@ export class PocketLibraryDb extends Dexie {
     this.version(2).stores({
       borrowers: 'id, name',
       snapshots: 'id, kind, createdAt',
+    });
+
+    // B4（schema v3，02 §8）：封面照片表（bookId 作主键，一本书一张）。
+    this.version(3).stores({
+      covers: 'bookId',
     });
   }
 }

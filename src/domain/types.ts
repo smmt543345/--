@@ -102,6 +102,23 @@ export interface Borrower {
   updatedAt: string;
 }
 
+/**
+ * 封面照片（02 §3.5）：一本书一张，`bookId` 即主键。
+ *
+ * 照片只存本机（IndexedDB Blob），不上传任何服务；进备份文件（03 §2 的 `data.covers`），
+ * **不进自动/恢复快照**（照片大，10 份快照各存一遍会翻十倍，02 §12.1）。
+ */
+export interface Cover {
+  bookId: string;
+  /** 压缩后的 JPEG（长边 ≤1000px） */
+  blob: Blob;
+  /** 固定 image/jpeg（v1 只收这一种） */
+  mime: string;
+  createdAt: string;
+  /** ISO 时间戳，重拍刷新 */
+  updatedAt: string;
+}
+
 export const SNAPSHOT_KINDS = ['auto', 'undo', 'pre-restore'] as const;
 export type SnapshotKind = (typeof SNAPSHOT_KINDS)[number];
 
@@ -120,6 +137,11 @@ export interface Snapshot {
     copies: Copy[];
     loans: Loan[];
     borrowers: Borrower[];
+    /**
+     * **只有 `undo` 快照带封面**（02 §12.1）：只含被删书目那一张，
+     * 保证撤销删除后封面一并回来；auto / pre-restore 不含。
+     */
+    covers?: Cover[];
   };
 }
 

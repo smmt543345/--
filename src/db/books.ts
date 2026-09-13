@@ -129,10 +129,12 @@ export async function updateBook(db: PocketLibraryDb, id: string, patch: UpdateB
 
 /**
  * 删除书目（02 §9）：有副本时**拒绝**，必须先删除或转移副本。
- * 刻意不提供级联参数 —— 级联删掉的是实体书，不该由一个默认值决定。
+ * 刻意不提供级联参数 —— 级联删掉的是实体书，不该由一个默认值决定；
+ * 级联走 `deleteBookCompletely`（features/books/write.ts）。
+ * **封面跟着书目一起删**（B4）：书都没了，照片没有归属。
  */
 export async function deleteBook(db: PocketLibraryDb, id: string): Promise<void> {
-  await db.transaction('rw', db.books, db.copies, db.settings, async () => {
+  await db.transaction('rw', db.books, db.copies, db.covers, db.settings, async () => {
     const book = await db.books.get(id);
     if (book === undefined) throw new Error(`书目不存在：${id}`);
 
@@ -141,6 +143,7 @@ export async function deleteBook(db: PocketLibraryDb, id: string): Promise<void>
       throw new Error(`该书目还有 ${copies} 本副本，请先删除或转移副本`);
     }
     await db.books.delete(id);
+    await db.covers.delete(id);
     await bumpWriteCounter(db);
   });
 }

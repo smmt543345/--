@@ -19,7 +19,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { useDb } from '../../app/db-context.ts';
-import { COPY_CONDITION_LABELS, bookDisplayTitle, locationPathText } from '../../app/labels.ts';
+import { COVER_LABELS, COPY_CONDITION_LABELS, bookDisplayTitle, locationPathText } from '../../app/labels.ts';
 import {
   Banner,
   Button,
@@ -35,14 +35,17 @@ import {
 } from '../../app/ui.tsx';
 import { useAsyncAction, useLiveQuery } from '../../app/useLiveQuery.ts';
 import { listBooks } from '../../db/books.ts';
+import { putCover } from '../../db/covers.ts';
 import { listLocations } from '../../db/locations.ts';
 import { SETTING_KEYS, getSetting } from '../../db/settings.ts';
 import { parsePositiveInt } from '../../domain/text.ts';
 import { COPY_CONDITIONS } from '../../domain/types.ts';
 import type { Book, CopyCondition, Location } from '../../domain/types.ts';
 import { completeChat, isAiConfigured, type AiConfig } from '../../platform/ai.ts';
+import type { CompressedImage } from '../../platform/image.ts';
 import { AI_SYSTEM_PROMPT, buildAiUserPrompt, mergeAiFields, parseAiResponse } from './ai.ts';
 import { BulkImportSection } from './BulkImportSection.tsx';
+import { CoverPicker } from './CoverPicker.tsx';
 import {
   EMPTY_DRAFT,
   MAX_INITIAL_COUNT,
@@ -72,6 +75,8 @@ export function NewBookPage(): ReactNode {
   // needsIsbnConfirm：submitBook 返回待确认时进入这个状态，给「合并 / 仍然新建」选项
   const [isbnConflicts, setIsbnConflicts] = useState<Book[] | null>(null);
   const [mergeIntoId, setMergeIntoId] = useState('');
+  // 拍好的封面先留在这里，保存书目时随书入库（04 §11.8：先存书目再存封面）
+  const [pendingCover, setPendingCover] = useState<CompressedImage | null>(null);
 
   const locations = useLiveQuery<Location[]>(async () => listLocations(db), [db], []);
   const books = useLiveQuery<Book[]>(async () => listBooks(db), [db], []);
@@ -156,6 +161,20 @@ export function NewBookPage(): ReactNode {
       // 保存成功后才记（04 §11.2）：位置/品相/标签下次进新增页时回填，
       // 连录几十本时不用每次重选
       await rememberDraftPrefs(db, candidate);
+      // 先存书目再存封面（04 §11.8）：封面以 bookId 为主键，得先有那本书。
+      // 封面写失败时书目已经落库了，所以要把这句话说清楚；但**不能让用户再点一次「保存」**
+      // 去补救——没填 ISBN 时那条路会再建一条同名书目，填了 ISBN 时合并又会按副本数再建一遍副本。
+      // 指路详情页重拍，两边都不会有副作用。
+      if (pendingCover !== null) {
+        try {
+          await putCover(db, { bookId: result.book.id, blob: pendingCover.blob, mime: pendingCover.mime });
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          throw new Error(
+            `${COVER_LABELS.saveFailed}：${reason}。书目已经保存好了，去这本书的详情页就能重新拍一张。`,
+          );
+        }
+      }
       // created / merged 都去详情页：接着加副本、借出都在那里
       navigate(`/books/${result.book.id}`);
     });
@@ -262,6 +281,15 @@ export function NewBookPage(): ReactNode {
           value={draft.coverUrl}
           onValueChange={(value) => setDraft({ ...draft, coverUrl: value })}
           hint="网络图片地址，可以留空"
+        />
+        {/* 拍照存封面（04 §11.8）：先在这里预览确认，保存书目时随书入库 */}
+        <CoverPicker
+          title={bookDisplayTitle({ title: draft.title, isbn: draft.isbn })}
+          current={pendingCover}
+          onConfirm={setPendingCover}
+          onDelete={() => setPendingCover(null)}
+          removeLabel={COVER_LABELS.removePending}
+          disabled={action.pending}
         />
         <TextField
           label="标签"

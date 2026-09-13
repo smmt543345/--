@@ -1,23 +1,36 @@
 /**
  * 导出。规范见 docs/design/03-backup-and-merge.md §3.2。
  *
- * 导出的序列化路径与自动快照完全相同：只此一份实现，不另造第二套。
+ * 导出的序列化路径与自动快照完全相同（快照只是不带封面段，02 §12.1）：
+ * 只此一份实现，不另造第二套。
  */
 
 import { SCHEMA_VERSION } from '../db/schema.ts';
+import { coverToDataUrl, listCovers } from '../db/covers.ts';
 import { SETTING_KEYS, getSetting, setSetting } from '../db/settings.ts';
 import type { PocketLibraryDb } from '../db/schema.ts';
 import { nowIso } from '../domain/time.ts';
-import { BACKUP_FORMAT, BACKUP_FORMAT_VERSION, serializeBackup, type BackupFile } from './format.ts';
+import {
+  BACKUP_FORMAT,
+  BACKUP_FORMAT_VERSION,
+  serializeBackup,
+  type BackupCover,
+  type BackupFile,
+} from './format.ts';
 
 export interface ExportOptions {
   /** 不传则取本机设置里的 deviceName */
   deviceName?: string;
+  /**
+   * 是否带上封面段（默认带）。快照路径传 false（02 §12.1）：
+   * 照片大，10 份快照各存一遍会翻十倍，所以连读都不读封面表。
+   */
+  includeCovers?: boolean;
 }
 
 /** 从数据层生成一份备份对象（不落盘；落盘由 platform 层决定）。 */
 export async function buildBackup(db: PocketLibraryDb, options: ExportOptions = {}): Promise<BackupFile> {
-  // 一次性读取五张业务表；不引入第二套序列化
+  // 一次性读取五张业务表（封面另走下面那一段，因为快照路径要跳过它）；不引入第二套序列化
   const [locations, books, copies, loans, borrowers] = await Promise.all([
     db.locations.toArray(),
     db.books.toArray(),
@@ -25,6 +38,19 @@ export async function buildBackup(db: PocketLibraryDb, options: ExportOptions = 
     db.loans.toArray(),
     db.borrowers.toArray(),
   ]);
+  // 照片存的是 Blob，JSON 装不下二进制 → 落文件前一律转成 base64 data URL（03 §2）
+  const covers: BackupCover[] =
+    options.includeCovers === false
+      ? []
+      : await Promise.all(
+          (await listCovers(db)).map(async (cover) => ({
+            bookId: cover.bookId,
+            mime: cover.mime,
+            dataUrl: await coverToDataUrl(cover),
+            createdAt: cover.createdAt,
+            updatedAt: cover.updatedAt,
+          })),
+        );
 
   const deviceName = options.deviceName ?? (await getSetting<string>(db, SETTING_KEYS.deviceName, ''));
 
@@ -40,8 +66,9 @@ export async function buildBackup(db: PocketLibraryDb, options: ExportOptions = 
       copies: copies.length,
       loans: loans.length,
       borrowers: borrowers.length,
+      covers: covers.length,
     },
-    data: { locations, books, copies, loans, borrowers },
+    data: { locations, books, copies, loans, borrowers, covers },
   };
 }
 

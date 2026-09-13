@@ -5,7 +5,7 @@ import { withDb } from '../../testing/harness.ts';
 import { findBooksByIsbn, listBooks } from '../../db/books.ts';
 import { listLocations } from '../../db/locations.ts';
 import { UNSORTED_LOCATION_ID } from '../../domain/ids.ts';
-import { parsePasteText, parseCsvText, bulkImportBooks, parseCsvLine, type ParsedBookRow } from './import.ts';
+import { parsePasteText, parseCsvText, parseTextFile, parseJsonFile, sourceFromJson, bulkImportBooks, parseCsvLine, type ParsedBookRow } from './import.ts';
 import { MAX_INITIAL_COUNT } from './write.ts';
 
 describe('粘贴解析（05 §2.1）', () => {
@@ -259,6 +259,58 @@ describe('位置与副本列（05 §2.2，P0-1）', () => {
       await bulkImportBooks(db, [row({ title: '三体' })], { condition: 'good' });
       const copies = await db.copies.toArray();
       assert.equal(copies[0]?.condition, 'good');
+    });
+  });
+});
+
+describe('文本类文件与 JSON（05 §2.1，B4）', () => {
+  it('制表符 / 竖线 / 连续空格文件都走同一条列映射管线', () => {
+    const tabbed = parseTextFile('书名\t作者\t位置\n三体\t刘慈欣\t书房');
+    assert.equal(tabbed[0]?.title, '三体');
+    assert.equal(tabbed[0]?.location, '书房');
+    const pipe = parseTextFile('| 书名 | 作者 |\n| --- | --- |\n| 活着 | 余华 |');
+    assert.equal(pipe[0]?.author, '余华');
+    const spaced = parseTextFile('三体    刘慈欣    9787536692930');
+    assert.equal(spaced[0]?.author, '刘慈欣');
+    assert.equal(spaced[0]?.isbn, '9787536692930');
+  });
+
+  it('探测不出分隔符 → 回退逗号口径（全角逗号也是分隔符）', () => {
+    const rows = parseTextFile('活着，余华\n三体', '书单.txt');
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0]?.author, '余华');
+    assert.equal(rows[1]?.title, '三体');
+  });
+
+  it('JSON：行号 = 数组里第几条，副本/位置列生效，跳过规则照常', async () => {
+    await withDb(async (db) => {
+      const json = '[{"书名":"三体","作者":"刘慈欣","位置":"书房","副本数":2},{"title":"三体","author":"张三"}]';
+      const source = sourceFromJson(json, '书单.json');
+      assert.equal(source.kind, 'json');
+      const report = await bulkImportBooks(db, parseJsonFile(json, '书单.json'));
+      assert.equal(report.created, 1);
+      assert.equal(report.copiesCreated, 2, '行里的副本数生效');
+      assert.equal(report.skipped[0]?.line, 2, '第 2 条与第 1 条同名 → 本批内重复');
+      assert.match(report.skipped[0]?.reason ?? '', /本批内已有同名/);
+      assert.ok((await listLocations(db)).some((item) => item.name === '书房'), '行里的位置名自动新建');
+    });
+  });
+
+  it('JSON 非数组 / 空数组报人话错误，不写库', async () => {
+    await withDb(async (db) => {
+      assert.throws(() => sourceFromJson('{"book":[]}'), /数组/);
+      assert.throws(() => sourceFromJson('[]'), /一条书目都没有/);
+      assert.equal(await db.books.count(), 0);
+      assert.equal(await db.copies.count(), 0);
+    });
+  });
+
+  it('新格式下的跳过规则与老格式一致（行号对原始行）', async () => {
+    await withDb(async (db) => {
+      const report = await bulkImportBooks(db, parseTextFile('三体\t刘慈欣\n三体\t张三', '书单.tsv'));
+      assert.equal(report.created, 1);
+      assert.equal(report.skipped[0]?.line, 2);
+      assert.match(report.skipped[0]?.reason ?? '', /本批内已有同名/);
     });
   });
 });

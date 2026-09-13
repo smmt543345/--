@@ -20,6 +20,8 @@ export interface RepairReport {
   loansDeleted: number;
   duplicateActiveLoansResolved: number;
   copyStatusFixed: number;
+  /** I10（B4）：孤儿封面删掉的张数 */
+  orphanCoversDeleted: number;
   pathsRebuilt: number;
   warnings: string[];
 }
@@ -32,6 +34,7 @@ const EMPTY_REPORT = (): RepairReport => ({
   loansDeleted: 0,
   duplicateActiveLoansResolved: 0,
   copyStatusFixed: 0,
+  orphanCoversDeleted: 0,
   pathsRebuilt: 0,
   warnings: [],
 });
@@ -42,11 +45,8 @@ const MAX_CYCLE_PASSES = 64;
 export async function repairInvariants(db: PocketLibraryDb): Promise<RepairReport> {
   return db.transaction(
     'rw',
-    db.locations,
-    db.books,
-    db.copies,
-    db.loans,
-    db.settings,
+    // 六张表：超过 5 张用数组形式（01 §6 硬约束）
+    [db.locations, db.books, db.copies, db.loans, db.covers, db.settings],
     async () => {
       const report = EMPTY_REPORT();
 
@@ -90,6 +90,17 @@ export async function repairInvariants(db: PocketLibraryDb): Promise<RepairRepor
         report.copiesDeleted += 1;
         report.loansDeleted += loans.length;
         report.warnings.push(`副本 ${copy.id} 指向的书目不存在，副本与相关借出记录已删除`);
+      }
+
+      /* ---- I10：封面指向的书目必须存在（B4，02 §6） ---- */
+      // 快照回滚不动封面表，所以删掉书目后留下的封面靠这里兜底（02 §3.5）。
+      // 取主键而不是整行：这一趟只要 bookId，没必要把几十 MB 照片读进内存。
+      const coverBookIds = (await db.covers.toCollection().primaryKeys()) as string[];
+      const orphanCoverIds = coverBookIds.filter((bookId) => !bookIds.has(bookId));
+      await db.covers.bulkDelete(orphanCoverIds);
+      report.orphanCoversDeleted += orphanCoverIds.length;
+      for (const bookId of orphanCoverIds) {
+        report.warnings.push(`封面（书目 ${bookId}）指向的书目不存在，已删除`);
       }
 
       /* ---- I2：副本指向的位置必须存在 ---- */
@@ -185,11 +196,12 @@ export async function repairInvariants(db: PocketLibraryDb): Promise<RepairRepor
 /** 只做检查、不落盘，供"数据体检"入口使用。 */
 export async function checkInvariants(db: PocketLibraryDb): Promise<{ ok: boolean; problems: string[] }> {
   const problems: string[] = [];
-  const [locations, books, copies, loans] = await Promise.all([
+  const [locations, books, copies, loans, coverBookIds] = await Promise.all([
     db.locations.toArray(),
     db.books.toArray(),
     db.copies.toArray(),
     db.loans.toArray(),
+    db.covers.toCollection().primaryKeys() as Promise<string[]>,
   ]);
 
   if (locations.find((l) => l.id === UNSORTED_LOCATION_ID) === undefined) {
@@ -206,6 +218,9 @@ export async function checkInvariants(db: PocketLibraryDb): Promise<{ ok: boolea
   }
   for (const loan of loans) {
     if (!copyIds.has(loan.copyId)) problems.push(`借出记录 ${loan.id} 的副本不存在（I3）`);
+  }
+  for (const coverBookId of coverBookIds) {
+    if (!bookIds.has(coverBookId)) problems.push(`封面 ${coverBookId} 的书目不存在（I10）`);
   }
 
   const { cycles, dangling } = computeLocationPaths(locations as Location[]);

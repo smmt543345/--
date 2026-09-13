@@ -1,13 +1,14 @@
 /**
- * 批量导入区（04 §11.1、05 §2）：粘贴 / CSV / Excel 三入口 → 预览（前 5 行 +
- * 「第 N 列 → 字段」映射）→ 批量默认值 → 执行 → 报告。
+ * 批量导入区（04 §11.1、05 §2）：粘贴 / 文件（CSV、Excel、Word、文本类、JSON）两入口 →
+ * 预览（前 5 行 + 「第 N 列 → 字段」映射）→ 批量默认值 → 执行 → 报告。
  *
  * 自 NewBookPage 拆出：这一整块自成一条流水线（读表 → 认列 → 建书建副本），
- * 混在书目表单里会让页面读不下去。拆开后它只依赖 import.ts / xlsx.ts，
- * 不与表单字段互相牵扯。
+ * 混在书目表单里会让页面读不下去。拆开后它只依赖 import.ts 与各格式解析器
+ * （`import-detect.ts` / `xlsx.ts` / `docx.ts`），不与表单字段互相牵扯。
  *
  * 「先预览再写库」不是可选项（05 §2.2）：用户的书单格式五花八门，列识别错了
  * 还能在下拉里改，改完再执行 —— 免得几百条书目一次建歪，回头再删。
+ * 文件按**扩展名**分派解析器（`formatOfFile`），所以一个「选择文件…」就够了。
  */
 
 import { useState, type ReactNode } from 'react';
@@ -30,12 +31,16 @@ import { useAsyncAction, useLiveQuery } from '../../app/useLiveQuery.ts';
 import { listLocations } from '../../db/locations.ts';
 import { COPY_CONDITIONS } from '../../domain/types.ts';
 import type { CopyCondition, Location } from '../../domain/types.ts';
-import { pickBinaryFile, pickTextFile } from '../../platform/files.ts';
+import { pickBinaryFile } from '../../platform/files.ts';
+import { readDocxSource } from './docx.ts';
+import { IMPORT_FILE_ACCEPT, formatOfFile } from './import-detect.ts';
 import {
   bulkImportBooks,
   rowsFromSource,
   sourceFromCsv,
+  sourceFromJson,
   sourceFromPaste,
+  sourceFromText,
   type BulkImportReport,
   type ImportSource,
 } from './import.ts';
@@ -62,6 +67,31 @@ const FIELD_OPTIONS: readonly SelectOption[] = [
 
 function emptyReport(reason: string): BulkImportReport {
   return { created: 0, copiesCreated: 0, skipped: [{ line: 0, reason }], suspected: [], warnings: [] };
+}
+
+/**
+ * 文本类文件按 UTF-8 读（05 §2.1）：不自动探测编码 —— Excel 存出来的中文 GBK CSV
+ * 会显示成乱码，用户按「选择文件…」下面那行提示另存 UTF-8 或改用 xlsx 导入即可。
+ * TextDecoder 默认会剥掉 BOM。
+ */
+function decodeUtf8(bytes: Uint8Array): string {
+  return new TextDecoder('utf-8').decode(bytes);
+}
+
+/** 文件 → 导入源（05 §2.1）：按扩展名分派；`.doc` 与不认识的格式由 formatOfFile 抛人话错误。 */
+async function sourceFromFile(file: { name: string; bytes: Uint8Array }): Promise<ImportSource> {
+  switch (formatOfFile(file.name)) {
+    case 'csv':
+      return sourceFromCsv(decodeUtf8(file.bytes), file.name);
+    case 'text':
+      return sourceFromText(decodeUtf8(file.bytes), file.name);
+    case 'json':
+      return sourceFromJson(decodeUtf8(file.bytes), file.name);
+    case 'xlsx':
+      return readXlsxSource(file.bytes, file.name);
+    case 'docx':
+      return readDocxSource(file.bytes, file.name);
+  }
 }
 
 export function BulkImportSection(): ReactNode {
@@ -97,17 +127,10 @@ export function BulkImportSection(): ReactNode {
     setReport(null);
   }
 
-  function previewCsv(): void {
+  function previewFile(): void {
     void action.run(async () => {
-      const file = await pickTextFile('.csv,text/csv');
-      if (file !== null) show(sourceFromCsv(file.text, file.name));
-    });
-  }
-
-  function previewXlsx(): void {
-    void action.run(async () => {
-      const file = await pickBinaryFile('.xlsx,.xls');
-      if (file !== null) show(await readXlsxSource(file.bytes, file.name));
+      const file = await pickBinaryFile(IMPORT_FILE_ACCEPT);
+      if (file !== null) show(await sourceFromFile(file));
     });
   }
 
@@ -128,7 +151,7 @@ export function BulkImportSection(): ReactNode {
       <div>
         <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">批量导入</h2>
         <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-300">
-          一次导入一整份书单：粘贴、CSV、Excel 都行。先预览识别结果，确认后再按下面的默认值建书目与副本；
+          一次导入一整份书单：粘贴、CSV、Excel、Word、文本、JSON 都行。先预览识别结果，确认后再按下面的默认值建书目与副本；
           重复的书自动跳过（05 §2）。
         </p>
       </div>
@@ -145,13 +168,17 @@ export function BulkImportSection(): ReactNode {
         <Button onClick={() => show(sourceFromPaste(pasteText))} disabled={action.pending || pasteText.trim() === ''}>
           预览粘贴的书单
         </Button>
-        <Button onClick={previewCsv} disabled={action.pending}>
-          选择 CSV 文件…
-        </Button>
-        <Button onClick={previewXlsx} disabled={action.pending}>
-          选择 Excel 文件…
+        <Button onClick={previewFile} disabled={action.pending}>
+          选择文件…
         </Button>
       </div>
+      <p className="text-xs text-neutral-500 dark:text-neutral-400">
+        文件支持 CSV / Excel（.xlsx .xls）/ Word（.docx）/ 文本（.txt .md .tsv）/ JSON；
+        .doc 是 Word 旧格式，请先在 Word 里另存为 .docx。
+      </p>
+      <p className="text-xs text-neutral-500 dark:text-neutral-400">
+        文件一律按 UTF-8 读（不自动猜编码）：Excel 存出来的中文 CSV 常常是 GBK，选出来是乱码的话请另存为 UTF-8，或改用 xlsx 导入。
+      </p>
       {action.error !== null && <InlineError>{action.error}</InlineError>}
 
       {source !== null && (

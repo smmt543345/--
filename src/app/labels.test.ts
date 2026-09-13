@@ -20,7 +20,9 @@ import {
   bookDisplayTitle,
   COPY_CONDITION_LABELS,
   COPY_STATUS_LABELS,
+  COVER_LABELS,
   copyStatusTone,
+  coverPhotoAlt,
   describeLastExport,
   describeUndo,
   formatDateTime,
@@ -199,6 +201,25 @@ describe('快照与撤销的展示口径（04 §6、§11.4）', () => {
   });
 });
 
+describe('封面文案（04 §11.8）', () => {
+  it('按钮文案都非空，入口与删除按钮在两个页面用的是同一套说法', () => {
+    for (const value of Object.values(COVER_LABELS)) {
+      assert.equal(typeof value, 'string');
+      assert.notEqual(value.trim(), '');
+    }
+    assert.match(COVER_LABELS.capture, /拍照/);
+    // 同一个动作在详情页与新增页不该叫两个名字（04 §5「一处定义」）
+    assert.notEqual(COVER_LABELS.remove, COVER_LABELS.removePending);
+    // 这句是 04 §11.8 写死的人话，页面原样展示
+    assert.equal(COVER_LABELS.readFailed, '这张图读不了，换一张试试');
+  });
+
+  it('封面图的 alt 带上书名，读屏能听出是哪一本', () => {
+    assert.equal(coverPhotoAlt('三体'), '三体 的封面照片');
+    assert.equal(coverPhotoAlt(bookDisplayTitle({ title: '', isbn: '' })), '（未命名） 的封面照片');
+  });
+});
+
 describe('importSummaryRows', () => {
   const summary: ImportSummary = {
     mode: 'merge',
@@ -208,6 +229,7 @@ describe('importSummaryRows', () => {
     copies: { inserted: 4, updated: 0, skipped: 1, relocated: 2 },
     loans: { inserted: 0, updated: 1, skipped: 0, conflicts: 1 },
     borrowers: { inserted: 0, updated: 0 },
+    covers: { inserted: 0, updated: 0, skipped: 0 },
     warnings: [],
     durationMs: 12,
   };

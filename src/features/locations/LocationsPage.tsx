@@ -67,6 +67,7 @@ import {
   type LocationTreeNode,
   type LocationType,
 } from '../../domain/types.ts';
+import { CoverThumb } from '../books/CoverThumb.tsx';
 import { flattenTree, isSortOrderInvalid, parentOptions, parseSortOrder } from './tree-view.ts';
 
 /* ------------------------------------------------------------------ *
@@ -431,6 +432,8 @@ export function LocationsPage(): ReactNode {
                     to={`/books/${copy.bookId}`}
                     className="flex min-h-11 items-center gap-2 py-1.5 hover:bg-neutral-100 dark:hover:bg-neutral-800/60"
                   >
+                    {/* 行首缩略图（04 §11.8）：没有照片就不渲染，这一行不会多出一块空格 */}
+                    <CoverThumb bookId={copy.bookId} />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium text-neutral-800 dark:text-neutral-100">
                         {book === undefined ? '（这条副本的书目记录已丢失）' : bookDisplayTitle(book)}

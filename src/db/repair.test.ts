@@ -4,6 +4,7 @@ import { UNSORTED_LOCATION_ID, newId } from '../domain/ids.ts';
 import { withDb } from '../testing/harness.ts';
 import { createBook } from './books.ts';
 import { createCopy, getCopy } from './copies.ts';
+import { putCover } from './covers.ts';
 import { createLocation } from './locations.ts';
 import { loanOut } from './loans.ts';
 import { checkInvariants, repairInvariants } from './repair.ts';
@@ -44,6 +45,7 @@ describe('不变式修复通道（02 §6）', () => {
           loansDeleted: report.loansDeleted,
           duplicateActiveLoansResolved: report.duplicateActiveLoansResolved,
           copyStatusFixed: report.copyStatusFixed,
+          orphanCoversDeleted: report.orphanCoversDeleted,
           pathsRebuilt: report.pathsRebuilt,
         },
         {
@@ -54,6 +56,7 @@ describe('不变式修复通道（02 §6）', () => {
           loansDeleted: 0,
           duplicateActiveLoansResolved: 0,
           copyStatusFixed: 0,
+          orphanCoversDeleted: 0,
           pathsRebuilt: 0,
         },
         '干净数据不得产生任何写入 —— 这是导入幂等性的前提',
@@ -254,6 +257,32 @@ describe('不变式修复通道（02 §6）', () => {
       assert.equal(result.ok, false);
       assert.ok(result.problems.some((p) => p.includes('I2')));
       assert.deepEqual(await db.copies.get(copy.id), before, '检查不得修改数据');
+    });
+  });
+
+  it('S23 孤儿封面（I10）：封面指向不存在的书目 → 删除并记警告（B4）', async () => {
+    await withDb(async (db) => {
+      const book = await createBook(db, { title: '书' });
+      await putCover(db, { bookId: book.id, blob: new Blob([new Uint8Array([1])]), mime: 'image/jpeg' });
+      // 快照回滚不动封面表，“书目没了但照片还在”正是这条不变式要兜的情形（02 §3.5）
+      await putCover(db, { bookId: '查无此书', blob: new Blob([new Uint8Array([2])]), mime: 'image/jpeg' });
+
+      const check = await checkInvariants(db);
+      assert.equal(check.ok, false, '检查阶段就要能看出问题');
+      assert.ok(check.problems.some((p) => p.includes('I10')));
+      assert.ok(await db.covers.get('查无此书'), '检查不得动数据');
+
+      const report = await repairInvariants(db);
+      assert.equal(report.orphanCoversDeleted, 1);
+      assert.equal(await db.covers.count(), 1, '只有孤儿那张被删');
+      assert.ok(await db.covers.get(book.id), '好书目的封面不能跟着被删');
+      assert.ok(
+        report.warnings.some((w) => w.includes('查无此书')),
+        '删了就必须说清是哪一张，不能静默清理',
+      );
+
+      // 数据已合规 → 再跑一次是 0 变更（导入幂等性的前提，03 §8）
+      assert.equal((await repairInvariants(db)).orphanCoversDeleted, 0);
     });
   });
 });

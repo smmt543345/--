@@ -11,6 +11,7 @@ import type { Snapshot } from '../domain/types.ts';
 import type { PocketLibraryDb } from './schema.ts';
 import { createBook } from './books.ts';
 import { createCopy, deleteCopy } from './copies.ts';
+import { putCover } from './covers.ts';
 import { createLocation, deleteLocation } from './locations.ts';
 import { loanOut } from './loans.ts';
 import { expireUndo, restoreUndo } from './snapshots.ts';
@@ -18,6 +19,14 @@ import { deleteBookCompletely } from '../features/books/write.ts';
 
 async function undoOf(db: PocketLibraryDb): Promise<Snapshot | undefined> {
   return db.snapshots.where('kind').equals('undo').first();
+}
+
+function jpeg(...bytes: number[]): Blob {
+  return new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' });
+}
+
+async function bytesOf(blob: Blob): Promise<number[]> {
+  return [...new Uint8Array(await blob.arrayBuffer())];
 }
 
 describe('删除撤销（02 §9.1）', () => {
@@ -157,6 +166,44 @@ describe('删除撤销（02 §9.1）', () => {
       assert.equal(await expireUndo(db, { olderThanMs: 30_000 }, late), 1, '超时后清理');
       assert.equal(await db.snapshots.where('kind').equals('undo').count(), 0);
       assert.equal(await db.copies.get(copy.id), undefined, '数据仍是删除后状态');
+    });
+  });
+
+  it('S21 删书目·级联 → 撤销（B4）：封面随 undo 快照一并恢复（blob 字节一致）', async () => {
+    await withDb(async (db) => {
+      const book = await createBook(db, { title: '书' });
+      await createCopy(db, { bookId: book.id });
+      await putCover(db, { bookId: book.id, blob: jpeg(3, 1, 4, 1, 5), mime: 'image/jpeg' });
+
+      await deleteBookCompletely(db, book.id, { strategy: 'cascade' });
+      assert.equal(await db.covers.count(), 0, '书目没了，封面跟着删（02 §9）');
+
+      const undo = await undoOf(db);
+      assert.ok(undo);
+      assert.equal(undo.data.covers?.length, 1, 'undo 快照要带上被删书目那张照片（02 §12.1）');
+      assert.equal(undo.data.covers?.[0]?.bookId, book.id);
+
+      await restoreUndo(db);
+      const restored = await db.covers.get(book.id);
+      assert.ok(restored, '撤销后封面必须回来');
+      assert.deepEqual(await bytesOf(restored.blob), [3, 1, 4, 1, 5], '照片按字节原样写回，不是重压一遍');
+      assert.equal(restored.mime, 'image/jpeg');
+    });
+  });
+
+  it('删副本的 undo 不带封面段：没有数据被销毁，不该顺手清掉别人的照片', async () => {
+    await withDb(async (db) => {
+      const book = await createBook(db, { title: '书' });
+      await putCover(db, { bookId: book.id, blob: jpeg(9), mime: 'image/jpeg' });
+      const copy = await createCopy(db, { bookId: book.id });
+      await deleteCopy(db, copy.id);
+
+      const undo = await undoOf(db);
+      assert.equal(undo?.data.covers, undefined);
+      await restoreUndo(db);
+      const kept = await db.covers.get(book.id);
+      assert.ok(kept, '封面不该被删副本的撤销带上或带走');
+      assert.deepEqual(await bytesOf(kept.blob), [9]);
     });
   });
 });

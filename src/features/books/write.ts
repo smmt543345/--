@@ -269,7 +269,7 @@ export interface DeleteBookOptions {
  * 连副本一起删除书目（02 §9：deleteBook 有副本时拒绝，级联必须显式发生）。
  * 副本正被借出时需 confirmLentOut —— 与 deleteCopy 的语义一致。
  *
- * 02 §9.1：同一事务内先捕获 undo 快照（书目 + 副本 + 借出全量）再删 ——
+ * 02 §9.1：同一事务内先捕获 undo 快照（书目 + 副本 + 借出 + 封面）再删 ——
  * 不委托 deleteCopy（那会按副本维度各拍一份 undo，互相顶掉）。
  */
 export async function deleteBookCompletely(
@@ -277,26 +277,39 @@ export async function deleteBookCompletely(
   bookId: string,
   options: DeleteBookOptions,
 ): Promise<{ copies: number; loans: number }> {
-  return db.transaction('rw', db.books, db.copies, db.loans, db.snapshots, db.settings, async () => {
-    const book = await db.books.get(bookId);
-    if (book === undefined) throw new Error(`书目不存在：${bookId}`);
+  return db.transaction(
+    'rw',
+    [db.books, db.copies, db.loans, db.covers, db.snapshots, db.settings],
+    async () => {
+      const book = await db.books.get(bookId);
+      if (book === undefined) throw new Error(`书目不存在：${bookId}`);
 
-    const copies = await db.copies.where('bookId').equals(bookId).toArray();
-    const copyIds = new Set(copies.map((c) => c.id));
-    const loans = (await db.loans.toArray()).filter((l) => copyIds.has(l.copyId));
+      const copies = await db.copies.where('bookId').equals(bookId).toArray();
+      const copyIds = new Set(copies.map((c) => c.id));
+      const loans = (await db.loans.toArray()).filter((l) => copyIds.has(l.copyId));
 
-    const active = loans.filter((l) => l.status === 'active');
-    if (active.length > 0 && options.confirmLentOut !== true) {
-      const who = active[0]?.borrower ?? '';
-      throw new Error(`该副本正被「${who}」借出，删除前请确认（confirmLentOut: true）`);
-    }
+      const active = loans.filter((l) => l.status === 'active');
+      if (active.length > 0 && options.confirmLentOut !== true) {
+        const who = active[0]?.borrower ?? '';
+        throw new Error(`该副本正被「${who}」借出，删除前请确认（confirmLentOut: true）`);
+      }
 
-    await captureUndo(db, { books: [book], copies, loans });
+      // 封面随书目一起走，但先捕获进 undo 快照（02 §3.5、§12.1）——
+      // 照片是本机唯一的副本，撤销时得原样回来，不能只靠重拍
+      const cover = await db.covers.get(bookId);
+      await captureUndo(db, {
+        books: [book],
+        copies,
+        loans,
+        ...(cover === undefined ? {} : { covers: [cover] }),
+      });
 
-    await db.loans.bulkDelete(loans.map((l) => l.id));
-    await db.copies.bulkDelete(copies.map((c) => c.id));
-    await db.books.delete(bookId);
-    await bumpWriteCounter(db);
-    return { copies: copies.length, loans: loans.length };
-  });
+      await db.loans.bulkDelete(loans.map((l) => l.id));
+      await db.copies.bulkDelete(copies.map((c) => c.id));
+      await db.books.delete(bookId);
+      await db.covers.delete(bookId);
+      await bumpWriteCounter(db);
+      return { copies: copies.length, loans: loans.length };
+    },
+  );
 }

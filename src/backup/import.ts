@@ -8,9 +8,10 @@
  */
 
 import { UNSORTED_LOCATION_ID } from '../domain/ids.ts';
-import { nowIso } from '../domain/time.ts';
+import { nowIso, earliest } from '../domain/time.ts';
 import type { Book, Copy, Loan, Location } from '../domain/types.ts';
 import { unsortedLocation } from '../db/client.ts';
+import { dataUrlToBlob } from '../db/covers.ts';
 import { rebuildLocationPaths } from '../db/locations.ts';
 import { getActiveLoanForCopy } from '../db/loans.ts';
 import { repairInvariants } from '../db/repair.ts';
@@ -22,6 +23,7 @@ import {
   deepEqual,
   mergeRecord,
   parseBackup,
+  type BackupCover,
   type BackupFile,
   type ImportMode,
   type ImportOptions,
@@ -40,6 +42,7 @@ function emptySummary(mode: ImportMode, dryRun: boolean): ImportSummary {
     copies: { inserted: 0, updated: 0, skipped: 0, relocated: 0 },
     loans: { inserted: 0, updated: 0, skipped: 0, conflicts: 0 },
     borrowers: { inserted: 0, updated: 0 },
+    covers: { inserted: 0, updated: 0, skipped: 0 },
     warnings: [],
     durationMs: 0,
   };
@@ -257,6 +260,49 @@ async function mergeLoans(
 }
 
 /* ------------------------------------------------------------------ *
+ * 封面（03 §4.7）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 封面按 `bookId` 对齐（一本书一张，无跨设备撞号场景）。
+ *
+ * 这里**刻意不复用 mergeRecord**（03 §5.1）：那个函数的 changed 判断走 deepEqual，
+ * 而 Blob 没有可枚举的自有属性 —— deepEqual 会把两张不同的照片判成相等，
+ * 新拍的封面就永远写不进去。§4.7 的口径也更简单：不做内容比较（照片几十 KB），
+ * 直接按 `updatedAt` 后写覆盖。
+ */
+async function mergeCovers(
+  db: PocketLibraryDb,
+  incoming: readonly BackupCover[],
+  idRemap: ReadonlyMap<string, string>,
+  summary: ImportSummary,
+  warn: (message: string) => void,
+): Promise<void> {
+  for (const wire of incoming) {
+    const targetBookId = idRemap.get(wire.bookId) ?? wire.bookId;
+    if ((await db.books.get(targetBookId)) === undefined) {
+      summary.covers.skipped += 1;
+      warn(`封面（书目 ${wire.bookId}）指向的书目在本地与文件中都不存在，已跳过`);
+      continue;
+    }
+
+    const local = await db.covers.get(targetBookId);
+    // 本地那张更新（或一样新）→ 一个字都不改：同一份文件导第二次就是靠这一行不改库（§8）
+    if (local !== undefined && wire.updatedAt <= local.updatedAt) continue;
+
+    await db.covers.put({
+      bookId: targetBookId,
+      blob: dataUrlToBlob(wire.mime, wire.dataUrl),
+      mime: wire.mime,
+      createdAt: local === undefined ? wire.createdAt : earliest(local.createdAt, wire.createdAt),
+      updatedAt: wire.updatedAt,
+    });
+    if (local === undefined) summary.covers.inserted += 1;
+    else summary.covers.updated += 1;
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * 主流程
  * ------------------------------------------------------------------ */
 
@@ -276,11 +322,14 @@ async function executeImport(
       // 03 §6 / 02 §9.1：整体替换业务表前先清理当前 undo 快照 ——
       // 否则 30 秒窗口内的旧撤销会把已替换掉的数据写回来，语义混乱
       await db.snapshots.where('kind').equals('undo').delete();
+      // replace 是「清空 + merge」（03 §6）：封面也是业务数据（02 §9 六张表），
+      // 不清掉的话，本机新拍的照片会与还原出来的旧库混在一起，两边都不是完整状态
       await db.loans.clear();
       await db.copies.clear();
       await db.books.clear();
       await db.locations.clear();
       await db.borrowers.clear();
+      await db.covers.clear();
     }
 
     // 「未分类」是所有位置的兜底，导入前必须存在（02 §7.2）
@@ -293,6 +342,7 @@ async function executeImport(
     await mergeCopies(db, backup.data.copies, idRemap, summary, warnings.add);
     await mergeLoans(db, backup.data.loans, summary, warnings.add);
     await mergeBorrowers(db, backup.data.borrowers, summary);
+    await mergeCovers(db, backup.data.covers, idRemap, summary, warnings.add);
 
     // 修复通道：重建路径 + 全部不变式
     const repair = await repairInvariants(db);
@@ -300,7 +350,9 @@ async function executeImport(
 
     if (!dryRun) {
       // 02 §12.3：applyImport 按实际变更条数（写进业务表的行数）计入写计数器；
-      // preview 不计（事务整体回滚）
+      // preview 不计（事务整体回滚）。
+      // 封面不算在内：计数口径只含五张业务表，而且快照本身不含封面 ——
+      // 让一批照片把计数顶到阈值，只会拍出一张根本不包含这些照片的快照。
       const changed =
         summary.locations.inserted +
         summary.locations.updated +
@@ -321,7 +373,7 @@ async function executeImport(
   try {
     await db.transaction(
       'rw',
-      [db.locations, db.books, db.copies, db.loans, db.borrowers, db.snapshots, db.settings],
+      [db.locations, db.books, db.copies, db.loans, db.borrowers, db.covers, db.snapshots, db.settings],
       body,
     );
   } catch (error) {
