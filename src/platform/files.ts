@@ -17,6 +17,32 @@ export function downloadText(filename: string, text: string, mime = 'application
 }
 
 /**
+ * 让用户选一个**二进制**文件并读出字节（xlsx/xls 导入，05 §2.1）；取消选择返回 null。
+ * 与 pickTextFile 同一套口径：取消是 resolve(null) 而不是 reject，否则调用方的
+ * await 会永远悬着（用户点一下「取消」界面就卡住）。
+ */
+export function pickBinaryFile(accept = '.xlsx,.xls'): Promise<{ name: string; bytes: Uint8Array } | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    input.addEventListener('change', () => {
+      const file = input.files?.[0];
+      if (file === undefined) {
+        resolve(null);
+        return;
+      }
+      file.arrayBuffer().then(
+        (buffer) => resolve({ name: file.name, bytes: new Uint8Array(buffer) }),
+        () => resolve(null),
+      );
+    });
+    input.addEventListener('cancel', () => resolve(null));
+    input.click();
+  });
+}
+
+/**
  * 让用户选一个文本文件并读出内容；取消选择返回 null。
  * 不用 FileReader：File.text() 已是标准且更短。
  *

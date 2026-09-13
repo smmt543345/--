@@ -8,6 +8,7 @@
 
 import type { ImportMode, ImportSummary } from '../backup/format.ts';
 import type { DeleteLocationStrategy } from '../db/locations.ts';
+import type { ImportField } from '../features/books/import-mapping.ts';
 import { joinList } from '../domain/text.ts';
 import { daysSince, isTimestampString, toLocalDate, today } from '../domain/time.ts';
 import type {
@@ -17,6 +18,8 @@ import type {
   LoanStatus,
   LocationType,
   MatchField,
+  Snapshot,
+  SnapshotKind,
 } from '../domain/types.ts';
 import type { Theme } from '../platform/theme.ts';
 
@@ -59,6 +62,18 @@ export const MATCH_FIELD_LABELS: Record<MatchField, string> = {
   publisher: '出版社',
 };
 
+/** 批量导入的列映射下拉用的字段名（05 §2.2）。 */
+export const IMPORT_FIELD_LABELS: Record<ImportField, string> = {
+  title: '书名',
+  author: '作者',
+  isbn: 'ISBN',
+  publisher: '出版社',
+  publishDate: '出版日期',
+  tags: '标签',
+  location: '位置',
+  copies: '副本数',
+};
+
 export const THEME_LABELS: Record<Theme, string> = {
   system: '跟随系统',
   light: '浅色',
@@ -73,6 +88,12 @@ export const IMPORT_MODE_LABELS: Record<ImportMode, string> = {
 export const DELETE_STRATEGY_LABELS: Record<DeleteLocationStrategy, string> = {
   reparent: '把子位置与副本上移到上级',
   cascade: '连同子位置、副本与借出记录一并删除',
+};
+
+export const SNAPSHOT_KIND_LABELS: Record<SnapshotKind, string> = {
+  auto: '自动快照',
+  undo: '删除撤销',
+  'pre-restore': '恢复前快照',
 };
 
 export type Tone = 'green' | 'amber' | 'red' | 'gray';
@@ -131,6 +152,38 @@ export function authorsText(authors: readonly string[]): string {
 /** 位置路径为空时的兜底文案（挂在已删除位置等异常数据的展示口径）。 */
 export function locationPathText(path: string): string {
   return path === '' ? '位置未知' : path;
+}
+
+/** 快照里各表的计数一行（04 §11.4）：只列非零项，空快照给一句说明而不是一排 0。 */
+export function snapshotCountsText(summary: Snapshot['summary']): string {
+  const parts: string[] = [];
+  if (summary.books > 0) parts.push(`${summary.books} 条书目`);
+  if (summary.copies > 0) parts.push(`${summary.copies} 本副本`);
+  if (summary.locations > 0) parts.push(`${summary.locations} 个位置`);
+  if (summary.loans > 0) parts.push(`${summary.loans} 条借出记录`);
+  if (summary.borrowers > 0) parts.push(`${summary.borrowers} 位借书人`);
+  return parts.length === 0 ? '没有任何记录' : parts.join(' · ');
+}
+
+/**
+ * 撤销横幅的说明（04 §6「已删除《XX》｜撤销」）：快照里有什么就说什么 ——
+ * 删副本、删书目级联、删位置级联三种删除共用这一句，不给每处各写一份文案。
+ */
+export function describeUndo(snapshot: Snapshot): string {
+  const { books, copies, locations, loans } = snapshot.data;
+  const gone: string[] = [];
+  const only = books[0];
+  if (books.length === 1 && only !== undefined) gone.push(`《${bookDisplayTitle(only)}》`);
+  else if (books.length > 1) gone.push(`${books.length} 条书目`);
+  if (copies.length > 0) gone.push(`${copies.length} 本副本`);
+  if (locations.length > 0) gone.push(`${locations.length} 个位置`);
+
+  const first = gone[0];
+  if (first === undefined) {
+    return loans.length > 0 ? `已删除 ${loans.length} 条借出记录` : '已删除一批数据';
+  }
+  // 书名号紧贴「已删除」（已删除《三体》）；以数字开头时留一个空格（已删除 1 本副本）
+  return `已删除${first.startsWith('《') ? '' : ' '}${gone.join('、')}`;
 }
 
 /* ------------------------------------------------------------------ *

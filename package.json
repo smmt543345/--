@@ -12,14 +12,15 @@
     "build:web": "node scripts/build.mjs web",
     "build:tauri": "node scripts/build.mjs tauri",
     "build:android": "node scripts/build.mjs android",
-    "test": "node --test \"src/**/*.test.ts\"",
+    "test": "node --import ./src/testing/indexeddb-setup.ts --test \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "dexie": "^4.0.11",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "react-router-dom": "^7.18.3"
+    "react-router-dom": "^7.18.3",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

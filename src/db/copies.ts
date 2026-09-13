@@ -12,6 +12,7 @@ import { nowIso, today } from '../domain/time.ts';
 import type { Copy, CopyCondition, CopyStatus, CopyWithLocation, Loan } from '../domain/types.ts';
 import type { PocketLibraryDb } from './schema.ts';
 import { bumpWriteCounter } from './settings.ts';
+import { captureUndo } from './snapshots.ts';
 
 /** 可被手工设置的副本终态/常态（不含 lent_out）。 */
 export const MANUAL_COPY_STATUSES = ['on_shelf', 'lost', 'sold'] as const;
@@ -161,7 +162,7 @@ export async function deleteCopy(
   id: string,
   options: { confirmLentOut?: boolean } = {},
 ): Promise<DeleteCopyResult> {
-  return db.transaction('rw', db.copies, db.loans, db.settings, async () => {
+  return db.transaction('rw', db.copies, db.loans, db.settings, db.snapshots, async () => {
     const copy = await db.copies.get(id);
     if (copy === undefined) throw new Error(`副本不存在：${id}`);
 
@@ -171,6 +172,9 @@ export async function deleteCopy(
       const who = (active[0] as Loan).borrower;
       throw new Error(`该副本正被「${who}」借出，删除前请确认（confirmLentOut: true）`);
     }
+
+    // 02 §9.1：删除前在同一事务内捕获 undo 快照（副本 + 其全部借出记录）
+    await captureUndo(db, { copies: [copy], loans });
 
     await db.loans.bulkDelete(loans.map((l) => l.id));
     await db.copies.delete(id);

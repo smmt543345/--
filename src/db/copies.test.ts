@@ -114,6 +114,32 @@ describe('副本服务', () => {
     });
   });
 
+  it('删除副本前在同一事务内挂 undo 快照（02 §9.1）', async () => {
+    await withDb(async (db) => {
+      const book = await createBook(db, { title: '书' });
+      const copy = await createCopy(db, { bookId: book.id });
+      await loanOut(db, { copyId: copy.id, borrower: '小王' });
+
+      await deleteCopy(db, copy.id, { confirmLentOut: true });
+      const undo = await db.snapshots.where('kind').equals('undo').first();
+      assert.ok(undo, '删除必须产生 undo 快照');
+      assert.equal(undo.data.copies.length, 1);
+      assert.equal(undo.data.copies[0]?.id, copy.id);
+      assert.equal(undo.data.loans.length, 1, '该副本的全部借出记录一并捕获');
+    });
+  });
+
+  it('拒绝的删除不产生 undo（确认不通过就什么都不落）', async () => {
+    await withDb(async (db) => {
+      const book = await createBook(db, { title: '书' });
+      const copy = await createCopy(db, { bookId: book.id });
+      await loanOut(db, { copyId: copy.id, borrower: '小王' });
+
+      await assert.rejects(() => deleteCopy(db, copy.id), /确认/);
+      assert.equal(await db.snapshots.where('kind').equals('undo').count(), 0, '被拒的删除不挂 undo');
+    });
+  });
+
   it('正被借出的副本必须显式确认才能删', async () => {
     await withDb(async (db) => {
       const book = await createBook(db, { title: '书' });

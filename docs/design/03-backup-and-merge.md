@@ -23,20 +23,23 @@
 {
   "format": "pocket-library-backup",   // 固定字符串，用于识别
   "formatVersion": 1,                  // 文件格式版本
-  "schemaVersion": 1,                  // 导出时的 Dexie schema 版本（02 §8.1）
+  "schemaVersion": 2,                  // 导出时的 Dexie schema 版本（02 §8.1）
   "exportedAt": "2026-09-11T11:39:52.000Z",
   "deviceName": "我的笔记本",            // 仅用于摘要展示，导入时忽略
-  "counts": { "locations": 12, "books": 86, "copies": 91, "loans": 24 },
+  "counts": { "locations": 12, "books": 86, "copies": 91, "loans": 24, "borrowers": 6 },
   "data": {
     "locations": [ /* Location[] */ ],
     "books":     [ /* Book[] */ ],
     "copies":    [ /* Copy[] */ ],
-    "loans":     [ /* Loan[] */ ]
+    "loans":     [ /* Loan[] */ ],
+    "borrowers": [ /* Borrower[]，P0-3 新增段；02 §5.5 */ ]
   }
 }
 ```
 
-**不导出 `settings`。** 理由：里面是「本机偏好 + 快照计数 + 上次导出时间」这类设备专属状态，导入别人的设置只会制造混乱。需要跨设备带走的配置项（如二维码基址）在后续版本里单独做白名单（§6）。
+**不导出 `settings` 与快照（snapshots）。** 理由：里面是「本机偏好 + 快照计数 + 上次导出时间 + 快照数据」这类设备专属状态，导入别人的只会制造混乱；快照与备份的分工见 02 §12.5。需要跨设备带走的配置项（如二维码基址）在后续版本里单独做白名单（§6）。
+
+**`data.borrowers` 是 P0-3 新增段**：借书人候选是业务数据（换设备不丢）；老版本备份文件没有该段（见 §3.1 容错）。
 
 ### 2.1 示例（最小可用文件）
 
@@ -44,10 +47,10 @@
 {
   "format": "pocket-library-backup",
   "formatVersion": 1,
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "exportedAt": "2026-09-11T11:39:52.000Z",
   "deviceName": "我的笔记本",
-  "counts": { "locations": 2, "books": 1, "copies": 1, "loans": 0 },
+  "counts": { "locations": 2, "books": 1, "copies": 1, "loans": 0, "borrowers": 0 },
   "data": {
     "locations": [
       { "id": "__unsorted__", "parentId": null, "name": "未分类", "path": "未分类", "depth": 0, "type": "home", "sortOrder": 0, "createdAt": "2026-09-01T00:00:00.000Z", "updatedAt": "2026-09-01T00:00:00.000Z" },
@@ -59,10 +62,13 @@
     "copies": [
       { "id": "c3d4...", "bookId": "9a1b...", "locationId": "5f0c...", "status": "on_shelf", "condition": "good", "owner": "", "note": "", "createdAt": "2026-09-01T00:00:00.000Z", "updatedAt": "2026-09-01T00:00:00.000Z" }
     ],
-    "loans": []
+    "loans": [],
+    "borrowers": []
   }
 }
 ```
+
+（`data.borrowers` 老文件可缺省，见 §3.1；新导出始终带该段。）
 
 ---
 
@@ -76,11 +82,12 @@
 | `format === 'pocket-library-backup'` | 「这不是掌上图书馆的备份文件」 |
 | `formatVersion` 是数字且 `<= 1` | 「此备份文件的格式版本（N）比当前版本更新，请升级 App」 |
 | `schemaVersion` 是数字且 `<= 当前 schema 版本` | 同上，文案提示是数据版本更新 |
-| `data` 是对象且四个数组存在 | 「备份文件缺少必要的数据段」 |
+| `data` 是对象且 `locations`/`books`/`copies`/`loans` 四个数组存在 | 「备份文件缺少必要的数据段」 |
+| `data.borrowers` 缺失 | **不报错**：老版本（schemaVersion 1）文件正常，视为空数组（§3.1） |
 
 ### 3.1 容错原则：宽进严出
 
-- **数组缺失**视为空数组（继续导入，记警告），不直接失败——用户手改过文件也应当能救回数据。
+- **数组缺失**视为空数组（继续导入，记警告），不直接失败——用户手改过文件也应当能救回数据。**例外：`data.borrowers` 缺失视为空数组且不警告**——那是 schemaVersion 1 的老文件，正常形态不是损坏。
 - **单条记录缺字段**：用 02 的默认值补全（空串 / `[]` / `unknown` / 导出时间），记警告，**逐字段提示**（「书目 b1 缺少字段 publisher，已按空串导入」）。判据是「文件里根本没有这个字段」——空串 / 空数组是用户显式写下的值，不算缺字段。`createdAt` / `updatedAt` 缺失或非法同样补齐并提示：用户看到的时间要是编出来的，他必须知道。
 - **只有 `id` 缺失或不是非空字符串才丢弃该条**，并记警告。`bookId`（副本）/ `copyId`（借出）缺失同样在清洗阶段丢弃该条并记警告——引用字段缺了，这条记录没有可落地的含义（§4.3、§4.4 对「指向不存在的对象」是同样的处理）。
 - **未知字段直接忽略**（不写入数据库），这样未来版本加字段不会污染老版本。
@@ -88,28 +95,29 @@
 ### 3.2 导出规则
 
 - `counts` 由导出时实时统计，导入时**忽略**（只作人工核对）。
-- 数组按 `id` 升序输出，使同一份数据多次导出的结果稳定可比对。
+- 数组按 `id` 升序输出（`borrowers` 同），使同一份数据多次导出的结果稳定可比对。
 - 时间戳原样输出（本来就是 ISO 字符串）。
 - 导出必须包含「未分类」位置（它是所有副本位置的兜底，缺了它导入端要重建）。
-- 导出使用**数据层已有的读取路径**（一次性 `toArray()` 四张表），不引入第二套序列化。
+- 导出使用**数据层已有的读取路径**（一次性 `toArray()` 五张业务表），不引入第二套序列化。
 
 ---
 
 ## 4. 合并算法
 
-全程在**一个 `rw` 事务**里完成（`locations` + `books` + `copies` + `loans` + `settings`）。任一步抛错则整体回滚——宁可没导入，也不能半途而废留下半套数据。
+全程在**一个 `rw` 事务**里完成（`locations` + `books` + `copies` + `loans` + `borrowers` + `settings`）。任一步抛错则整体回滚——宁可没导入，也不能半途而废留下半套数据。
 
 ```
 applyImport(backup, { mode }):
   1. 校验（§3）
-  2. mode === 'replace' → 清空四张表，重新播种「未分类」
+  2. mode === 'replace' → 清空五张业务表，重新播种「未分类」
   3. 确保「未分类」位置存在（merge 模式下本地本来就有，兜底一次）
   4. 合并 locations（§4.1）
   5. 合并 books，产出 idRemap（§4.2）
   6. 合并 copies，用 idRemap 重指向（§4.3）
   7. 合并 loans，做冲突裁定（§4.4）
-  8. 修复通道：rebuildLocationPaths() + repairInvariants()（02 §6）
-  9. 统计写入次数，返回摘要（§7）
+  8. 合并 borrowers（§4.5）
+  9. 修复通道：rebuildLocationPaths() + repairInvariants()（02 §6）
+  10. 统计变更计数，返回摘要（§7）
 ```
 
 ### 4.1 位置
@@ -142,7 +150,8 @@ idRemap: Map<传入书目的 id, 本地书目的 id>
 
 第二遍 —— 按 ISBN 对齐（只处理第一遍里本地没有的那些）：
   isbn === ''           → 无法判断 → 直接插入新书目（空 ISBN 不参与查重，02 §7.3）
-  本地存在同 isbn 的书目 → 视为同一本书：
+  本地存在同 isbn 的书目 → 视为同一本书：**多条时并入 `updatedAt` 最新的一条**
+                            （同 ISBN 多条只可能来自撤销恢复，02 §9.1；重复书目由 02 §10.1 口径提示整理）
                             字段级合并；idRemap.set(传入id, 本地id)；统计 mergedByIsbn
   否则                  → 插入新书目
 ```
@@ -172,16 +181,31 @@ idRemap: Map<传入书目的 id, 本地书目的 id>
 
 ```
 对每条传入借出 L：
+  L.copyId 指向的副本在本地不存在 → 丢弃该借出，统计 skipped，记警告
+      ——（与 §4.3「副本指向不存在的书目」对称：宁可报告，也不能让孤儿借出先插入
+          再被修复通道删掉，那样摘要的 inserted 计数会被搞假）
   本地已有同 id → 字段级合并（正常路径，覆盖不了什么，因为借出记录基本只追加）
   本地没有：
       若 L.status === 'returned' → 直接插入（历史记录，永远安全）
       若 L.status === 'active'：
           查本地该 copyId 是否已有 active 借出 A
             没有    → 插入
-            有      → 冲突（§5.2）
+            有      → 冲突（§4.6 裁定表）
 ```
 
-### 4.5 冲突裁定表
+### 4.5 借书人（P0-3）
+
+```
+对每条传入借书人 B：
+  本地已有同 id → 字段级合并（§5.1；无 tags 这类集合字段，纯 LWW）
+  本地没有      → 插入
+```
+
+借书人按 id 对齐即可，无跨设备撞号场景（02 §7.1 同源）。**不做按姓名自动合并**：
+姓名合并意味着两边同名的联系方式互相覆盖，收益小、规则复杂；真要合并，用户在设置页
+手动删一条即可。上限 20 条（02 §5.5）在导入后检查，超出时按 `updatedAt` 淘汰最旧。
+
+### 4.6 冲突裁定表
 
 | 冲突 | 裁定 | 依据 |
 |---|---|---|
@@ -224,12 +248,13 @@ idRemap: Map<传入书目的 id, 本地书目的 id>
 | 模式 | 语义 | 用途 |
 |---|---|---|
 | `merge`（默认） | 按 §4 合并，本地已有数据保留 | 朋友交换清单、增量合并 |
-| `replace` | 先清空四张表，再整体写入 | 从备份还原、换设备迁移 |
+| `replace` | 先清空五张业务表，再整体写入 | 从备份还原、换设备迁移 |
 
 `replace` 的额外要求：
 - UI 必须二次确认，文案写明「将删除本机现有的全部藏书数据」。
 - 清空后重新播种「未分类」（02 §7.2）。
 - 仍然走同一套写入逻辑（不是另一个函数），只是跳过 `idRemap` 相关的判断——落地方式：`replace` 就是「清空 + merge」，因为清空后不存在任何本地记录，merge 的行为自然退化为整体导入。**不允许为 replace 写第二套导入代码。**
+- replace 执行前先清理当前 undo 快照（02 §9.1）——否则 30 秒窗口内的旧撤销会把已替换掉的数据写回。
 
 ---
 
@@ -245,6 +270,7 @@ interface ImportSummary {
   books:     { inserted: number; updated: number; mergedByIsbn: number };
   copies:    { inserted: number; updated: number; skipped: number; relocated: number };
   loans:     { inserted: number; updated: number; skipped: number; conflicts: number };
+  borrowers: { inserted: number; updated: number };   // P0-3
   warnings:  string[];        // 人话，可直接展示给用户
   durationMs: number;
 }
@@ -260,8 +286,7 @@ interface ImportSummary {
 
 ## 8. 幂等性
 
-**定义**：对同一个备份文件，`applyImport` 连续执行两次，第二次的摘要必须满足
-`inserted` 全为 0、`updated` 全为 0、`conflicts` 为 0、`warnings` 为空。
+**定义**：对同一个备份文件，`applyImport` 连续执行两次，第二次的摘要必须与第一次**完全一致**——`inserted` 全为 0、`updated` 全为 0、`conflicts` 为 0；`skipped`/`reparented`/`relocated`/`warnings` 是对文件缺陷的**确定性重放**（同一文件每次导入产生相同内容），**不要求为空**。例：文件里有一个父位置缺失的位置，每次导入都会重挂并警告一次——这是宽进严出的正确行为（§3.1），不是幂等性破坏。
 
 这是硬性验收条件，必须有测试覆盖（§10 T7）。实现要点：
 - §5.1 的 `changed` 判断——没变化就不写。
@@ -282,13 +307,13 @@ interface ImportSummary {
 
 | # | 用例 | 断言 |
 |---|---|---|
-| T1 | 空库导入完整备份 | 四张表计数与文件一致；「未分类」存在 |
+| T1 | 空库导入完整备份 | 五张业务表计数与文件一致；「未分类」存在 |
 | T2 | 导出一份数据再导入自身（同库） | 全部 inserted=0、updated=0；T7 的幂等前提 |
 | T3 | 同一 ISBN、不同书目 id（两边各录了同一本书） | 书目只有 1 条；`mergedByIsbn=1`；传入方的副本**仍指向该书目**且副本数不变 |
 | T4 | 传入副本指向的书目不在本地也不在文件里 | 该副本被跳过；`warnings` 含其书名；无 I1 违规 |
 | T5 | 传入位置指向的父位置缺失 | 该位置 `parentId` 变成「未分类」；`reparented=1`；路径重建后可读 |
 | T6 | 同一副本两条 active 借出 | 本地那条仍为 active；传入那条为 `returned` 且 `note` 含冲突说明；`conflicts=1` |
-| T7 | 同一文件连续导入两次 | 第二次全部为 0 变更，`warnings` 为空（§8） |
+| T7 | 同一文件连续导入两次（完整文件 + 缺父位置的不完整文件两种 fixture） | 第二次 `inserted/updated/conflicts` 全 0；两次摘要的 `skipped/warnings` 逐字相同（§8） |
 | T8 | 位置成环（A→B→A） | 导入不挂死；环被打断；有警告；`rebuildLocationPaths` 正常返回 |
 | T9 | 非法输入：非 JSON / 缺 `format` / `formatVersion` 过高 / `data` 非对象 | 返回 `ok:false` 与对应错误文案，**不抛异常** |
 | T10 | 记录缺字段（缺 `tags`、缺 `publisher`） | 用默认值补全；导入成功；有警告 |
@@ -298,3 +323,8 @@ interface ImportSummary {
 | T14 | 传入标签与本地标签不同 | 取并集，两边标签都保留 |
 | T15 | `previewImport` | 返回与 `applyImport` 相同的摘要结构，且**数据库无任何变化** |
 | T16 | 事务回滚 | 某条记录写入失败时，整个导入不留下部分数据 |
+| T17 | 借书人随备份导入 | 传入借书人按 id 插入/合并；`borrowers` 计数正确（P0-3） |
+| T18 | 老文件（schemaVersion 1）无 `data.borrowers` 段 | 视为空数组，无警告，正常导入（P0-3） |
+| T19 | `replace` 模式 | 本地借书人被清空；文件中的借书人完整导入（P0-3） |
+| T20 | 传入借出指向的副本不存在（本地与文件里都没有） | 该借出被跳过并有警告；无 I3 违规；摘要 `skipped` 计数正确 |
+| T21 | replace 导入前存在未过期 undo 快照 | 导入后该 undo 快照被清理；导入结果不受影响 |

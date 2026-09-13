@@ -43,6 +43,8 @@ import { checkInvariants, repairInvariants } from '../../db/repair.ts';
 import { SETTING_KEYS, getSetting, setSetting } from '../../db/settings.ts';
 import { getLibraryCounts, type LibraryCounts } from '../../db/stats.ts';
 import { downloadText, pickTextFile } from '../../platform/files.ts';
+import { BorrowerSection } from './BorrowerSection.tsx';
+import { SnapshotSection } from './SnapshotSection.tsx';
 import { completeChat, isAiConfigured, type AiConfig } from '../../platform/ai.ts';
 import { THEMES } from '../../platform/theme.ts';
 import {
@@ -447,6 +449,9 @@ export function SettingsPage(): ReactNode {
         )}
       </Card>
 
+      {/* ---------------- 快照（04 §11.4） ---------------- */}
+      <SnapshotSection />
+
       {/* ---------------- 偏好 ---------------- */}
       <Card className="space-y-4 p-4">
         <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">偏好</h2>
@@ -487,6 +492,9 @@ export function SettingsPage(): ReactNode {
         </div>
         {prefsAction.error !== null && <InlineError>{prefsAction.error}</InlineError>}
       </Card>
+
+      {/* ---------------- 借书人（04 §11.3） ---------------- */}
+      <BorrowerSection />
 
       {/* ---------------- AI 配置（05 §3） ---------------- */}
       <Card className="space-y-4 p-4">
@@ -536,7 +544,7 @@ export function SettingsPage(): ReactNode {
       <Card className="space-y-3 p-4">
         <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">清空数据</h2>
         <p className="text-sm text-neutral-600 dark:text-neutral-300">
-          删除本机全部书目、副本、位置与借出记录。动手前请先导出备份。主题与设备名会保留。
+          删除本机全部书目、副本、位置、借书人与借出记录。动手前请先导出备份；万一删错了，也可以用上方「快照」区恢复到之前的状态。主题与设备名会保留。
         </p>
         <Button variant="danger" onClick={openClear} disabled={counts === null}>
           清空全部数据…

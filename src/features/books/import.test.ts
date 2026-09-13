@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { withDb } from '../../testing/harness.ts';
-import { findBooksByIsbn } from '../../db/books.ts';
-import { parsePasteText, parseCsvText, bulkImportBooks, parseCsvLine } from './import.ts';
+import { findBooksByIsbn, listBooks } from '../../db/books.ts';
+import { listLocations } from '../../db/locations.ts';
+import { UNSORTED_LOCATION_ID } from '../../domain/ids.ts';
+import { parsePasteText, parseCsvText, bulkImportBooks, parseCsvLine, type ParsedBookRow } from './import.ts';
+import { MAX_INITIAL_COUNT } from './write.ts';
 
 describe('粘贴解析（05 §2.1）', () => {
   it('支持三种形态：书名 / 书名,作者 / 书名,作者,ISBN（全角半角逗号都行）', () => {
@@ -168,6 +171,94 @@ describe('批量创建与跳过规则（05 §2.2）', () => {
       const found = await findBooksByIsbn(db, '9787506365437');
       assert.equal(found.length, 1);
       assert.equal(found[0]?.authors[0], '余华');
+    });
+  });
+});
+
+/** 造一行解析结果：只给关心的字段，其余用空值。 */
+function row(overrides: Partial<ParsedBookRow> = {}): ParsedBookRow {
+  return {
+    line: 1,
+    title: '',
+    author: '',
+    isbn: '',
+    publisher: '',
+    publishDate: '',
+    tags: [],
+    location: '',
+    copies: null,
+    ...overrides,
+  };
+}
+
+describe('位置与副本列（05 §2.2，P0-1）', () => {
+  it('默认：1 本副本、落在「未分类」、品相「新」', async () => {
+    await withDb(async (db) => {
+      const report = await bulkImportBooks(db, [row({ title: '三体' })]);
+      assert.equal(report.created, 1);
+      assert.equal(report.copiesCreated, 1);
+      const [book] = await listBooks(db);
+      assert.ok(book);
+      const copy = await db.copies.where('bookId').equals(book.id).first();
+      assert.equal(copy?.locationId, UNSORTED_LOCATION_ID);
+      assert.equal(copy?.condition, 'new');
+    });
+  });
+
+  it('默认副本数 0 = 只建书目不建副本', async () => {
+    await withDb(async (db) => {
+      const report = await bulkImportBooks(db, [row({ title: '三体' })], { copies: 0 });
+      assert.equal(report.created, 1);
+      assert.equal(report.copiesCreated, 0);
+      assert.equal(await db.copies.count(), 0);
+    });
+  });
+
+  it('行值优先：行里的副本数与位置名压过默认值；位置不存在时自动新建为顶层', async () => {
+    await withDb(async (db) => {
+      const report = await bulkImportBooks(db, [row({ title: '三体', copies: 2, location: '书房' })], {
+        copies: 5,
+      });
+      assert.equal(report.copiesCreated, 2, '行里的 2 压过默认的 5');
+      const location = (await listLocations(db)).find((item) => item.name === '书房');
+      assert.ok(location, '行里的位置名要自动新建');
+      assert.equal(location.parentId, null, '新建的是顶层位置');
+      const copies = await db.copies.toArray();
+      assert.equal(copies.length, 2);
+      assert.ok(copies.every((copy) => copy.locationId === location.id));
+    });
+  });
+
+  it('同批里第二行写同样的位置名时复用刚建的位置，不再新建', async () => {
+    await withDb(async (db) => {
+      await bulkImportBooks(db, [
+        row({ line: 1, title: '甲', location: '书房' }),
+        row({ line: 2, title: '乙', location: '书房' }),
+      ]);
+      const named = (await listLocations(db)).filter((item) => item.name === '书房');
+      assert.equal(named.length, 1);
+      const copies = await db.copies.toArray();
+      assert.equal(copies.length, 2);
+      assert.ok(copies.every((copy) => copy.locationId === named[0]?.id));
+    });
+  });
+
+  it('副本数超过上限：截断到 99 并记入报告警告（不算跳过）', async () => {
+    await withDb(async (db) => {
+      const report = await bulkImportBooks(db, [row({ title: '三体', copies: 999 })]);
+      assert.equal(report.created, 1);
+      assert.equal(report.copiesCreated, MAX_INITIAL_COUNT);
+      assert.equal(report.skipped.length, 0, '截断不是跳过');
+      assert.equal(report.warnings.length, 1);
+      assert.match(report.warnings[0]?.reason ?? '', new RegExp(String(MAX_INITIAL_COUNT)));
+    });
+  });
+
+  it('默认品相可指定，品相写进副本', async () => {
+    await withDb(async (db) => {
+      await bulkImportBooks(db, [row({ title: '三体' })], { condition: 'good' });
+      const copies = await db.copies.toArray();
+      assert.equal(copies[0]?.condition, 'good');
     });
   });
 });

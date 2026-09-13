@@ -16,9 +16,12 @@ Book ──── Copy ──── Loan
  (1)      (1..n)     (0..n，其中至多 1 条 active)
            │
            └── bookId → Book
+
+Borrower  借书人候选（独立表，无外键；Loan.borrower 是历史字符串快照，见 §5.5）
+Snapshot  快照（系统表，供删除撤销与全库回滚，见 §12）
 ```
 
-四条业务线，对应原文案四个核心概念：
+六张表对应六类实体：
 
 | 概念 | 实体 | 关键点 |
 |---|---|---|
@@ -26,6 +29,8 @@ Book ──── Copy ──── Loan
 | 书目 | `Book` | 一本书的通用信息，按 ISBN 查重 |
 | 副本 | `Copy` | 手里这一本，挂在位置上，**可以有多本** |
 | 借出 | `Loan` | 挂在**副本**上，不挂书目 |
+| 借书人 | `Borrower` | 借书人候选（P0-3）；无外键，与 Loan 解耦 |
+| 快照 | `Snapshot` | 删除撤销 + 自动快照共用（P0-4）；不参与业务外键 |
 
 ---
 
@@ -110,11 +115,36 @@ Book ──── Copy ──── Loan
 | `dueDate` | `string` | ✅ | 应还日期 `YYYY-MM-DD`；未设定为空串 |
 | `returnDate` | `string` | ✅ | 归还日期 `YYYY-MM-DD`；未归还为空串 |
 | `status` | `LoanStatus` | ✅ | `active` \| `returned` |
-| `note` | `string` | ✅ | 备注，默认空串。导入冲突会在此追加说明（03 §5） |
+| `note` | `string` | ✅ | 备注，默认空串。导入冲突会在此追加说明（03 §4.6） |
 | `createdAt` | `string` | ✅ | ISO 时间戳 |
 | `updatedAt` | `string` | ✅ | ISO 时间戳 |
 
 **为什么用空串而不是 `null` 表示「未设定」**：与 §3 同理，保持字段恒存在、类型恒为 `string`，避免 `null`/`undefined`/`''` 三态混乱。判断「有到期日」用 `dueDate !== ''`。
+
+---
+
+## 5.5 Borrower（借书人候选，P0-3）
+
+借书人候选表解决「同一个朋友借第 N 次，还要重打名字和联系方式」。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `id` | `string` | ✅ | UUID v4 |
+| `name` | `string` | ✅ | 借书人姓名 |
+| `contact` | `string` | ✅ | 联系方式，默认空串 |
+| `createdAt` | `string` | ✅ | ISO 时间戳 |
+| `updatedAt` | `string` | ✅ | ISO 时间戳 |
+
+规则：
+- **无外键**：`Loan.borrower` 是借出那一刻的历史字符串快照，不指向 Borrower——借书人
+  改名后，历史借出记录仍显示当时的名字。
+- **自动积累**：`loanOut` 成功后 upsert 一条候选——**`name` 一律存规范化姓名**
+  （trim + 折叠连续空白），不存在则插入，存在则更新 `contact` 与 `updatedAt`。
+- **手动管理**：设置页提供借书人管理区（增 / 改 / 删），删候选不影响任何借出记录；
+  新增时同样按规范化姓名去重——重名视为更新该候选的联系方式。
+- **上限 20 条**：超出时按 `updatedAt` 淘汰最旧的一条（候选是"最近常联系的人"，
+  不是通讯录）。
+- **进备份文件**：候选名单是业务数据，随 03 §2 的 `data.borrowers` 导出，换设备不丢。
 
 ---
 
@@ -134,7 +164,7 @@ Book ──── Copy ──── Loan
 | I8 | `Location.path` / `depth` 与树的实际结构一致 | 整树重算（§4） |
 | I9 | 不存在 `id` 重复的多行 | 不可能的数据库层面情况；导入时以 `id` 为准合并（03） |
 
-**I6 的优先级说明**：导入时的冲突裁定见 03 §5，那里的规则是「本地优先」，与本表 I6 的「保留最新」不同——I6 是**修复已损坏数据**时的兜底，两者不冲突，因为修复只在导入后对确实违规的数据生效。
+**I6 的优先级说明**：导入时的冲突裁定见 03 §4.6，那里的规则是「本地优先」，与本表 I6 的「保留最新」不同——I6 是**修复已损坏数据**时的兜底，两者不冲突，因为修复只在导入后对确实违规的数据生效。
 
 ---
 
@@ -154,7 +184,7 @@ ID 由**设备本地生成**，因此天然全局唯一——这是导入合并�
 export const UNSORTED_LOCATION_ID = '__unsorted__';
 ```
 
-- 数据库初始化时播种这一行：`{ id: UNSORTED_LOCATION_ID, parentId: null, name: '未分类', path: '未分类', depth: 0, type: 'home' }`。
+- 数据库初始化时播种这一行：`{ id: UNSORTED_LOCATION_ID, parentId: null, name: '未分类', path: '未分类', depth: 0, type: 'home', sortOrder: 0, createdAt: 播种时刻, updatedAt: 播种时刻 }`。
 - **不可删除、不可重命名、不可移动**（service 层拦截）。
 - 它的用途：位置未知的副本、导入时父节点缺失的位置、被删位置下的副本——都收容到这里。有了它，`Copy.locationId` 才能是「必填且总有效」。
 - 字面量不含连字符，不可能与 UUID 冲突。
@@ -188,6 +218,12 @@ this.version(1).stores({
   loans:     'id, copyId, status, dueDate, [copyId+status]',
   settings:  'key',
 });
+
+// P0-4（schema v2，2026-09-13）：只加表，不改旧表 —— 无回填
+this.version(2).stores({
+  borrowers: 'id, name',
+  snapshots: 'id, kind, createdAt',
+});
 ```
 
 说明：
@@ -195,6 +231,8 @@ this.version(1).stores({
 - **`parentId` 为 `null` 的记录不会进入索引**（IndexedDB 不索引 `null`）。顶层位置的查询在内存里做（`parentId === null` 过滤）。位置数量是几百级，无性能问题。
 - `books.title` 上的索引只用于排序；关键词搜索是内存过滤（§10）。
 - `settings` 是键值表：`key` 主键，`value` 任意可 JSON 化的值，另有 `updatedAt`。
+- `borrowers.name` 索引用于查重（§5.5 规范化姓名唯一）；`snapshots.kind` 用于撤销/自动快照的筛选（§12）。
+- `SCHEMA_VERSION` 升为 `2`；备份文件导出时携带它（03 §2 的 `schemaVersion`）。
 
 ### 8.1 版本升级纪律
 
@@ -202,13 +240,13 @@ this.version(1).stores({
 2. 加字段 → 新增 `version(N+1)`，`upgrade()` 里给老数据补默认值：
 
 ```ts
-this.version(2).stores({
+this.version(3).stores({
   books: 'id, isbn, title, createdAt, updatedAt, *tags, language',
 }).upgrade(tx => tx.table('books').toCollection().modify(b => { b.language ??= ''; }));
 ```
 
 3. 删索引/删表要谨慎：先发一版只停止使用，下一版再删。
-4. 数据结构变更后，**必须同时升级备份文件的 `schemaVersion`**（03 §3.3）。
+4. 数据结构变更后，**必须同时升级备份文件的 `schemaVersion`**（03 §2 的 `schemaVersion` 字段）。
 
 ---
 
@@ -220,9 +258,41 @@ this.version(2).stores({
 | 删位置 → 副本上移 | 副本的 `locationId` 改为被删位置的 `parentId`；若为顶层则改为 `UNSORTED_LOCATION_ID`。 |
 | 删书目 | 有副本时**默认拒绝**，UI 引导先把副本逐个删除或转移；副本为 0 时允许删除（其历史借出随副本删除）。级联删除（连副本带借出记录一起删）是显式例外：只允许走 `deleteBookCompletely(db, bookId, { strategy: 'cascade' })`，UI 必须二次确认并写明将删除的副本数、借出记录数与正被借出的副本名单。 |
 | 删副本 | 连带删除其全部借出记录（`Loan.copyId` 是 I3）。已借出的副本删除前必须二次确认，文案要写明「该副本正被 XX 借出」。 |
-| 清空数据 | 删除四个业务表全部记录，重新播种「未分类」与默认 `settings`；保留界面主题等本机偏好。 |
+| 清空数据 | 删除五张业务表（`locations`/`books`/`copies`/`loans`/`borrowers`）全部记录，重新播种「未分类」；`settings` **不动**（保留主题、AI 配置、表单记忆等本机偏好，缺键由 `ensureDefaultSettings` 补齐）；快照表**不动**（清空后仍可用快照恢复，04 §11.4）。 |
 
 **级联删除是不可逆的重操作**，`cascade` 策略必须在函数的签名里显式传参，不允许作为默认值。
+
+### 9.1 删除撤销（P0-4）
+
+删除不再是「点了就永久消失」：破坏性删除操作（删副本 / 删书目级联 / 删位置级联）在真正删除前，把受影响的记录捕获进
+`kind='undo'` 的快照（§12），30 秒内可撤销。
+
+| 操作 | 撤销范围 | 恢复方式 |
+|---|---|---|
+| 删副本（`deleteCopy`） | 该副本 + 其全部借出记录 | 按原 id 原样写回 |
+| 删书目·级联（`deleteBookCompletely`） | 书目 + 全部副本 + 全部借出记录 | 按原 id 原样写回 |
+| 删位置·级联（`deleteLocation` strategy=cascade） | 被删位置子树 + 其下副本 + 借出记录 | 按原 id 原样写回 |
+| 删位置·上移（strategy=reparent） | 不产生 undo（没有数据被销毁） | — |
+| 清空数据（`clearAllData`） | **不提供 undo**（二次确认 + 可用快照恢复，§12） | — |
+
+规则：
+- **一次只挂一份未撤销的 undo 快照**：新的删除操作顶掉旧的（旧的销毁，其恢复窗口结束）。
+- 撤销按钮 30 秒超时后（或用户点了关闭），该 undo 快照被清理。
+- 过期清理 API：`expireUndo(db, { olderThanMs })`（`now` 可注入以便测试）；横幅 30 秒
+  超时与启动清理都走它（启动时 `olderThanMs=0` 即全清）。
+- **撤销不跨会话**：应用启动时清理全部 `undo` 快照（04 §4 启动序列）——撤销横幅是
+  会话内 UI 状态，重启后不重现；快照残留由启动清理兜底。
+- 撤销恢复 = 按原 id 原样写回记录，随后跑 `rebuildLocationPaths()`（撤销位置级联删除后，
+  其余位置若在 30 秒内被移动过，物化路径可能已变）；若 30 秒内用户已新建了同 ISBN 的书，
+  撤销可能造成同 ISBN 两条书目——接受（02 §10.1 的重复书目口径会兜住，这是用户 30 秒内的连续操作）。
+- **replace 导入与快照恢复前，先清理当前 undo 快照**：这两类操作整体替换业务表，
+  30 秒窗口内的旧撤销会把已替换掉的数据写回来，语义混乱（03 §6、§12.4）。
+- undo 快照的写入**不算业务写操作**，不计入写计数器（§12.3 计数口径），否则删除一次会同时触发
+  快照阈值，语义混乱。
+- 实现位置：`deleteCopy` / `deleteBookCompletely` / `deleteLocation` 三个删除函数在
+  同一事务内经 `snapshots.ts` 的 `captureUndo()` API 先写 undo 快照再删（删除 service
+  不直接读写快照表，§11）。捕获用「删除前先读」的方式：把将要删除的行读出来
+  存进快照，而不是事后翻日志。
 
 ---
 
@@ -244,7 +314,7 @@ this.version(2).stores({
 
 `searchBooks({ keyword, locationId, status, tag, limit })`
 
-- **关键词**：对 `title` / `authors` / `isbn` / `tags` / `publisher` 做不区分大小写的子串匹配（中文无大小写概念，直接 `includes`）。非空 `keyword` 时忽略长度小于 1 的输入。
+- **关键词**：对 `title` / `authors` / `isbn` / `tags` / `publisher` 做不区分大小写的子串匹配（中文无大小写概念，直接 `includes`）。`keyword` 去除首尾空白后为空时视为无关键词条件。
 - **位置过滤**：`locationId` 命中**该位置及其所有子位置**（子树口径，与统计一致）。
 - **组合**：所有条件同时生效（AND）。`tag` 是书目维度的条件，单独用它时允许「有标签但一本实体都没有」的书出现；一旦同时给了 `locationId` / `status`，就必须真有符合条件的副本，否则该书不出现。
 - **`limit`**：结果条数上限，在排序之后截断。它与「有没有筛选条件」无关 —— 不传任何筛选的「列全部」分支同样受它约束（曾经只有带筛选的分支生效，已修）。
@@ -252,6 +322,16 @@ this.version(2).stores({
 - **返回**：`{ book, copies: CopyWithLocation[], matched: MatchField[] }`，其中 `CopyWithLocation = Copy & { locationPath: string; locationName: string; activeLoan: Loan | null }`。搜索列表要显示「位置路径 + 状态」，所以必须在数据层一次拼好，不让 UI 自己联表。
 
 **性能阀值**：若某天书目超过约 5000 条，需改为「先按索引粗筛再内存精筛」。现在不做，但在此记录阀值，避免以后误以为是设计失误。
+
+### 10.3 列表查询（N1/N2，2026-09-13 追加）
+
+搜索页与首页的两个新数据入口，实现在独立小模块 `db/listing.ts`（01 §5.1）：
+
+- **`listAllTags(db)`**：返回全库去重标签，取 `books` 表的 `*tags` multiEntry 索引
+  的 distinct 键，稳定排序（`localeCompare('zh')`）。供搜索页标签下拉（N1，04 §11.5）。
+- **`listRecentBooks(db, { limit })`**：按 `createdAt` 倒序取最近录入的书目，
+  返回 `{ book, copies: CopyWithLocation[] }`（与 §10.2 相同的组合视图，UI 不自己联表）。
+  供首页「最近添加」区块（N2，04 §11.6）。
 
 ---
 
@@ -264,3 +344,98 @@ this.version(2).stores({
 | `Location.path` / `depth` | **只有 `rebuildLocationPaths()` 写**，其他任何地方不许直接赋值 |
 | `Copy.status` | `on_shelf`/`lost`/`sold` 由副本 service 写；`lent_out` **只能**由借出 service 通过 I7 派生，不手工设置 |
 | `Loan.status` | 借出 service（`loanOut` / `returnCopy` / 导入冲突裁定） |
+| `Borrower` 整表 | 借书人 service（`borrowers.ts`）与借出 service（`loanOut` 自动 upsert）；导入经 `merge-borrowers.ts` 委托 `borrowers.ts`（03 §4.5） |
+| `Snapshot` 整表 | 快照 service（`snapshots.ts`）唯一写入；其他 service 不得直接读写快照表 |
+
+---
+
+## 12. Snapshot（快照，P0-4）
+
+快照表同时服务两件事：**删除撤销**（§9.1）与**全库回滚**（自动快照）。
+
+### 12.1 实体
+
+```ts
+interface Snapshot {
+  id: string;                 // UUID v4
+  kind: 'auto' | 'undo' | 'pre-restore';
+  createdAt: string;          // ISO 时间戳
+  summary: { locations: number; books: number; copies: number; loans: number; borrowers: number };
+  data: {
+    locations: Location[];
+    books: Book[];
+    copies: Copy[];
+    loans: Loan[];
+    borrowers: Borrower[];
+  };
+}
+```
+
+`data` 的形状与备份文件 `data` 段（03 §2）**完全一致**，复用同一套序列化路径
+（`backup/format.ts` 的 build 逻辑），不另造结构。
+
+### 12.2 三种 kind
+
+| kind | 内容 | 触发 | 生命周期 |
+|---|---|---|---|
+| `undo` | 只含被删的记录（部分数据） | 删除操作前（§9.1） | 30 秒超时 / 撤销 / 被新 undo 顶掉 |
+| `auto` | 全库五张业务表 | 写计数 ≥ 20 且距上次 ≥ 1 天（01 §3.3） | 滚动保留最近 10 份 |
+| `pre-restore` | 恢复前一刻的全库 | 用户执行快照恢复前自动拍 | 同 `auto` 一起滚动保留 |
+
+### 12.3 自动快照触发与保留（用户定稿参数，2026-09-13）
+
+- 每个写操作在事务内 `bumpWriteCounter`（`settings.writesSinceSnapshot` +1，01 §3.3）。
+- 计数达到 **20** 且 `lastAutoSnapshotAt` 距现在 ≥ **1 天** → 拍一张 `auto` 快照，然后
+  `resetWriteCounter`（这是「空转计数器」的兑现：快照成功后必须归零）。
+- **触发时机**：`bumpWriteCounter` 只负责计数；达到阈值后，**在写事务提交之后**由快照
+  service 异步拍 `auto` 快照并 `resetWriteCounter`（事务内读全库会放大锁范围，且快照
+  若与写同事务，回滚会把快照一起带走）。
+- **竞态接受**：提交与 `resetWriteCounter` 之间的并发写入可能漏计一次——只影响快照
+  节奏、不丢数据，不加锁。
+- **计数口径**：仅五张业务表的增删改计入；`settings`、快照表本身、撤销/恢复的写入
+  一律不计（恢复是 replace 语义的整体重写，计入会立刻再触发阈值，无意义）。
+  `applyImport` 按实际变更条数计入（写进业务表的行数）；`previewImport` 不计（事务整体回滚）。
+- 保留最近 **10** 份 `auto`/`pre-restore` 快照，超出删最旧。
+- 设置页显示「最近快照时间」+ 快照列表 + 「恢复」按钮（04 §11）。
+
+### 12.4 恢复语义
+
+恢复 = 把快照 `data` 以「清空 + 整体写入」的方式落回五张业务表（03 §6 的 replace
+语义，但**只清业务五表**，`settings` 与其余快照不动），写入后跑
+`rebuildLocationPaths` + `repairInvariants`（02 §6）。恢复**前**先自动拍一张
+`pre-restore` 快照——恢复操作本身也允许反悔；恢复前同样先清理当前 undo 快照
+（§9.1）——旧撤销会把已恢复掉的数据写回。
+
+### 12.5 与备份的边界
+
+- 快照**不进备份文件**（与 `settings` 同类的设备专属状态，03 §2）。
+- 快照与备份的分工：快照防「误删误改、想回滚」，备份防「换设备、朋友交换」。
+- 快照存 IndexedDB 内，防不住「IndexedDB 被清」——那由后续阶段的快照落盘解决
+  （01 §3.2 第 3 层的文件层设计不变，只是移到后续项）。
+
+## 13. 测试用例清单（P0-4 + N1/N2）
+
+`src/db/snapshots.test.ts` / `src/db/snapshots-restore.test.ts` / `src/db/borrowers.test.ts` / `src/db/listing.test.ts` 必须覆盖：
+
+| # | 用例 | 断言 |
+|---|---|---|
+| S1 | 删副本 → 30 秒内撤销 | 副本与其借出记录按原 id 恢复；undo 快照被清理 |
+| S2 | 删书目·级联 → 撤销 | 书目 + 副本 + 借出全恢复；原 id 不变 |
+| S3 | 删位置·级联 → 撤销 | 位置子树 + 副本 + 借出全恢复；路径重建后正确 |
+| S4 | 删位置·上移（reparent） | 不产生 undo 快照 |
+| S5 | 第二次删除顶掉第一次的 undo | 旧 undo 被销毁；只能撤销最新一次 |
+| S6 | 撤销超时清理 | `expireUndo`（注入 now，30 秒后）执行后 undo 快照不存在；数据仍是删除后状态 |
+| S7 | 写计数达 20 且距上次 ≥1 天 | 自动拍 `auto` 快照；计数器归零 |
+| S8 | 写计数 <20 或距上次 <1 天 | 不拍快照 |
+| S9 | 快照超过 10 份 | 最旧的被删；恰好保留 10 份 |
+| S10 | 恢复快照 | 五表与快照一致；恢复前有 `pre-restore` 快照；settings 不变 |
+| S11 | 恢复后不变式 | `repairInvariants` 零警告；「未分类」存在 |
+| S12 | 借书人 upsert | 同名借出两次只有一条候选；contact 取最新 |
+| S13 | 借书人超 20 条 | 最旧 updatedAt 被淘汰 |
+| S14 | 删借书人候选 | 历史借出记录的 borrower 字符串不变 |
+| S15 | 借书人随备份导出/导入 | 03 §10 的 T17/T18 覆盖 |
+| S16 | 启动清理超期 undo | 应用启动（即 `expireUndo(db, { olderThanMs: 0 })`）后全部 `undo` 快照被清；业务数据不受影响 |
+| S17 | 借书人手动新增重名 | 按规范化姓名去重：重名视为更新该候选的联系方式（02 §5.5） |
+| S18 | `listAllTags` | 去重；标签多/单/零个书目的库都正确；稳定排序（§10.3） |
+| S19 | `listRecentBooks` | 按 `createdAt` 倒序；`limit` 截断；返回的副本组合视图完整（§10.3） |
+| S20 | 快照恢复前有未过期 undo | 恢复后该 undo 快照被清理（§12.4）；恢复结果不受其影响 |

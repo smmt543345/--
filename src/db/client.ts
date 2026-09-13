@@ -49,18 +49,24 @@ export async function openDb(name: string = DB_NAME): Promise<PocketLibraryDb> {
 }
 
 /**
- * 清空数据（02 §9）：删除四张业务表全部记录，重置快照/导出计数，
- * **保留**主题等本机偏好，并重新播种「未分类」。
+ * 清空数据（02 §9）：删除五张业务表（locations/books/copies/loans/borrowers）全部记录，
+ * **保留** settings（主题、AI 配置、表单记忆等本机偏好）与快照表（清空后仍可用快照
+ * 恢复，04 §11.4），并重新播种「未分类」。
  */
 export async function clearAllData(db: PocketLibraryDb): Promise<void> {
-  await db.transaction('rw', db.locations, db.books, db.copies, db.loans, db.settings, async () => {
-    await db.loans.clear();
-    await db.copies.clear();
-    await db.books.clear();
-    await db.locations.clear();
-    await resetSettings(db);
-    await db.locations.put(unsortedLocation());
-  });
+  await db.transaction(
+    'rw',
+    [db.locations, db.books, db.copies, db.loans, db.borrowers, db.settings],
+    async () => {
+      await db.loans.clear();
+      await db.copies.clear();
+      await db.books.clear();
+      await db.locations.clear();
+      await db.borrowers.clear();
+      await resetSettings(db);
+      await db.locations.put(unsortedLocation());
+    },
+  );
 }
 
 /**

@@ -16,6 +16,7 @@ import { nowIso } from '../domain/time.ts';
 import type { Location, LocationTreeNode } from '../domain/types.ts';
 import type { PocketLibraryDb } from './schema.ts';
 import { bumpWriteCounter } from './settings.ts';
+import { captureUndo } from './snapshots.ts';
 
 export type DeleteLocationStrategy = 'reparent' | 'cascade';
 
@@ -202,7 +203,7 @@ export async function deleteLocation(
   id: string,
   strategy?: DeleteLocationStrategy,
 ): Promise<DeleteLocationResult> {
-  return db.transaction('rw', db.locations, db.copies, db.loans, db.settings, async () => {
+  return db.transaction('rw', db.locations, db.copies, db.loans, db.settings, db.snapshots, async () => {
     if (isUnsorted(id)) throw new Error('「未分类」不可删除');
     const location = await requireLocation(db, id);
 
@@ -241,6 +242,13 @@ export async function deleteLocation(
       const copyIds = new Set(affected.map((c) => c.id));
       const loans = await db.loans.toArray();
       const victimLoans = loans.filter((l) => copyIds.has(l.copyId));
+      // 02 §9.1：级联删除前在同一事务内捕获 undo 快照（子树 + 副本 + 借出）；
+      // reparent 分支不产生 undo（没有数据被销毁）
+      await captureUndo(db, {
+        locations: locations.filter((l) => subtree.has(l.id)),
+        copies: affected,
+        loans: victimLoans,
+      });
       await db.loans.bulkDelete(victimLoans.map((l) => l.id));
       await db.copies.bulkDelete([...copyIds]);
       await db.locations.bulkDelete([...subtree]);

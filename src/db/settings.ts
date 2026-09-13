@@ -29,6 +29,8 @@ export const SETTING_KEYS = {
   aiApiKey: 'aiApiKey',
   /** AI 模型名 */
   aiModel: 'aiModel',
+  /** 新增表单记忆：上次保存时的位置/品相/标签（04 §11.2，设备专属，不进备份） */
+  lastDraftPrefs: 'lastDraftPrefs',
 } as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[keyof typeof SETTING_KEYS];
@@ -44,6 +46,7 @@ export const DEFAULT_SETTINGS: Record<string, unknown> = {
   [SETTING_KEYS.aiBaseUrl]: 'https://api.openai.com/v1',
   [SETTING_KEYS.aiApiKey]: '',
   [SETTING_KEYS.aiModel]: 'gpt-4o-mini',
+  [SETTING_KEYS.lastDraftPrefs]: {},
 };
 
 /** 清空数据时要重置的键（其余本机偏好保留）。见 02 §9。 */
@@ -83,12 +86,36 @@ export async function resetSettings(db: PocketLibraryDb): Promise<void> {
 /**
  * 写操作计数器（01 §3.3）。所有 service 写操作在**同一个事务内**调用它，
  * 供自动快照判断是否需要落盘。
+ *
+ * 闭环（02 §12.3）：计数达到阈值后，在**写事务提交之后**由快照 service 异步拍
+ * auto 快照并归零。这里只负责排程 —— 用动态 import 避免 settings ↔ snapshots 循环依赖。
  */
+export const AUTO_SNAPSHOT_WRITE_THRESHOLD = 20;
+
+async function scheduleAutoSnapshotCheck(db: PocketLibraryDb): Promise<void> {
+  const { scheduleAutoSnapshot } = await import('./snapshots.ts');
+  scheduleAutoSnapshot(db);
+}
+
 export async function bumpWriteCounter(db: PocketLibraryDb): Promise<number> {
   const current = await getSetting<number>(db, SETTING_KEYS.writesSinceSnapshot, 0);
   const next = (typeof current === 'number' ? current : 0) + 1;
   await setSetting(db, SETTING_KEYS.writesSinceSnapshot, next);
+  if (next >= AUTO_SNAPSHOT_WRITE_THRESHOLD) {
+    void scheduleAutoSnapshotCheck(db);
+  }
   return next;
+}
+
+/** 按条数计（02 §12.3）：applyImport 按实际变更条数（写进业务表的行数）计入。 */
+export async function bumpWriteCounterBy(db: PocketLibraryDb, count: number): Promise<void> {
+  if (!Number.isInteger(count) || count <= 0) return;
+  const current = await getSetting<number>(db, SETTING_KEYS.writesSinceSnapshot, 0);
+  const next = (typeof current === 'number' ? current : 0) + count;
+  await setSetting(db, SETTING_KEYS.writesSinceSnapshot, next);
+  if (next >= AUTO_SNAPSHOT_WRITE_THRESHOLD) {
+    void scheduleAutoSnapshotCheck(db);
+  }
 }
 
 export async function resetWriteCounter(db: PocketLibraryDb, snapshotAt: string = nowIso()): Promise<void> {

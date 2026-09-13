@@ -79,7 +79,7 @@ describe('previewMatchesChoice', () => {
   });
 });
 
-const COUNTS: BackupCounts = { locations: 4, books: 12, copies: 15, loans: 3 };
+const COUNTS: BackupCounts = { locations: 4, books: 12, copies: 15, loans: 3, borrowers: 2 };
 
 function makeSummary(overrides: Partial<ImportSummary> = {}): ImportSummary {
   const empty = { inserted: 0, updated: 0, skipped: 0 };
@@ -90,6 +90,7 @@ function makeSummary(overrides: Partial<ImportSummary> = {}): ImportSummary {
     books: { ...empty, mergedByIsbn: 0 },
     copies: { ...empty, relocated: 0 },
     loans: { ...empty, conflicts: 0 },
+    borrowers: { inserted: 0, updated: 0 },
     warnings: [],
     durationMs: 1,
     ...overrides,

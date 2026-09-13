@@ -9,6 +9,7 @@ import { NavLink, Outlet } from 'react-router-dom';
 
 import { NAV_ITEMS } from './nav.tsx';
 import { buttonClass, cn } from './ui.tsx';
+import { UndoBanner } from './UndoBanner.tsx';
 
 const ICON_URL = `${import.meta.env.BASE_URL}icons/icon-192.png`;
 
@@ -106,6 +107,9 @@ export function AppShell(): ReactNode {
           <TabLink key={item.to} {...item} />
         ))}
       </nav>
+
+      {/* 删除撤销横幅（04 §6）：挂在外壳上，切页面也一直在（§11.4） */}
+      <UndoBanner />
     </div>
   );
 }

@@ -13,21 +13,32 @@ import { Link, useNavigate } from 'react-router-dom';
 
 import { useBootInfo } from '../../app/boot-context.ts';
 import { useDb } from '../../app/db-context.ts';
-import { bookDisplayTitle, copyStatusTone, describeLastExport } from '../../app/labels.ts';
+import { bookDisplayTitle, copyStatusTone, describeLastExport, authorsText } from '../../app/labels.ts';
 import { Badge, Banner, Button, Card, EmptyState, PageHeader, Spinner, StatTile, cn } from '../../app/ui.tsx';
 import { useLiveQuery } from '../../app/useLiveQuery.ts';
 import { listOverdueLoans } from '../../db/loans.ts';
+import { listRecentBooks } from '../../db/listing.ts';
 import { SETTING_KEYS, getSetting } from '../../db/settings.ts';
 import { getStats, type LibraryStats } from '../../db/stats.ts';
 import { daysSince, isTimestampString, toLocalDate, today } from '../../domain/time.ts';
-import type { LoanWithBook } from '../../domain/types.ts';
+import type { Book, CopyWithLocation, LoanWithBook } from '../../domain/types.ts';
 
 /** 超过这么多天没导出就醒目提醒（01 §3.2 第 3 条）。 */
 const EXPORT_REMINDER_DAYS = 14;
 
+/** 「最近添加」区块最多列多少本（04 §11.6）。 */
+const RECENT_LIMIT = 8;
+
+interface RecentBook {
+  book: Book;
+  copies: CopyWithLocation[];
+}
+
 interface OverviewSnapshot {
   stats: LibraryStats;
   overdue: LoanWithBook[];
+  /** 最近录入的书（createdAt 倒序，04 §11.6）；空库时为空数组 */
+  recent: RecentBook[];
   /** 上次导出的 ISO 时间戳；从未导出为空串 */
   lastExportAt: string;
 }
@@ -62,12 +73,13 @@ export function OverviewPage(): ReactNode {
 
   const snapshot = useLiveQuery<OverviewSnapshot | null>(
     async () => {
-      const [stats, overdue, lastExportAt] = await Promise.all([
+      const [stats, overdue, recent, lastExportAt] = await Promise.all([
         getStats(db),
         listOverdueLoans(db),
+        listRecentBooks(db, { limit: RECENT_LIMIT }),
         getSetting<string>(db, SETTING_KEYS.lastExportAt, ''),
       ]);
-      return { stats, overdue, lastExportAt };
+      return { stats, overdue, recent, lastExportAt };
     },
     [db],
     null,
@@ -127,7 +139,7 @@ function OverviewContent({
   snapshot: OverviewSnapshot;
   onGoToSettings: () => void;
 }): ReactNode {
-  const { stats, overdue, lastExportAt } = snapshot;
+  const { stats, overdue, recent, lastExportAt } = snapshot;
 
   const exportAge = exportAgeInDays(lastExportAt);
   const exportStale = exportAge === null || exportAge >= EXPORT_REMINDER_DAYS;
@@ -183,6 +195,33 @@ function OverviewContent({
           </ul>
         )}
       </section>
+
+      {/* 最近添加（04 §11.6）：刚录入的书一眼可及，不用去搜索页碰运气 */}
+      {recent.length > 0 && (
+        <section aria-label="最近添加">
+          <h2 className="mb-2 text-sm font-medium text-neutral-700 dark:text-neutral-300">最近添加</h2>
+          <ul className="space-y-2">
+            {recent.map(({ book, copies }) => (
+              <li key={book.id}>
+                <Card>
+                  <Link
+                    to={`/books/${book.id}`}
+                    className="flex min-h-11 items-center justify-between gap-3 p-3 hover:bg-neutral-50 dark:hover:bg-neutral-800/60"
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium">{bookDisplayTitle(book)}</span>
+                      <span className="mt-0.5 block truncate text-xs text-neutral-500 dark:text-neutral-400">
+                        {authorsText(book.authors)}
+                      </span>
+                    </span>
+                    <Badge tone="gray">{copies.length} 本</Badge>
+                  </Link>
+                </Card>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <Card className={cn('p-3', exportStale && 'border-amber-300 dark:border-amber-800')}>
         <div className="flex flex-wrap items-center justify-between gap-2">

@@ -8,10 +8,10 @@
  */
 
 import Dexie, { type Table } from 'dexie';
-import type { Book, Copy, Loan, Location, Setting } from '../domain/types.ts';
+import type { Book, Borrower, Copy, Loan, Location, Setting, Snapshot } from '../domain/types.ts';
 
 /** 当前 schema 版本，导出备份时要写进文件（03 §2）。 */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const DB_NAME = 'pocket-library';
 
@@ -20,6 +20,8 @@ export class PocketLibraryDb extends Dexie {
   books!: Table<Book, string>;
   copies!: Table<Copy, string>;
   loans!: Table<Loan, string>;
+  borrowers!: Table<Borrower, string>;
+  snapshots!: Table<Snapshot, string>;
   settings!: Table<Setting, string>;
 
   constructor(name: string = DB_NAME) {
@@ -33,6 +35,12 @@ export class PocketLibraryDb extends Dexie {
       copies: 'id, bookId, locationId, status, [bookId+locationId]',
       loans: 'id, copyId, status, dueDate, [copyId+status]',
       settings: 'key',
+    });
+
+    // P0-4（schema v2，02 §8）：只加表，不改旧表 —— 无回填。
+    this.version(2).stores({
+      borrowers: 'id, name',
+      snapshots: 'id, kind, createdAt',
     });
   }
 }

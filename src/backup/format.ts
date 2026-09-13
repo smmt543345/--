@@ -4,13 +4,14 @@
  */
 
 import { isValidId } from '../domain/ids.ts';
-import { isDateString, isTimestampString, nowIso } from '../domain/time.ts';
+import { earliest, isDateString, isTimestampString, nowIso } from '../domain/time.ts';
 import {
   COPY_CONDITIONS,
   COPY_STATUSES,
   LOCATION_TYPES,
   LOAN_STATUSES,
   type Book,
+  type Borrower,
   type Copy,
   type CopyCondition,
   type CopyStatus,
@@ -29,6 +30,7 @@ export interface BackupCounts {
   books: number;
   copies: number;
   loans: number;
+  borrowers: number;
 }
 
 export interface BackupData {
@@ -36,6 +38,8 @@ export interface BackupData {
   books: Book[];
   copies: Copy[];
   loans: Loan[];
+  /** P0-3 新增段（02 §5.5）；老文件缺省视为空数组（§3.1） */
+  borrowers: Borrower[];
 }
 
 export interface BackupFile {
@@ -64,6 +68,8 @@ export interface ImportSummary {
   books: { inserted: number; updated: number; mergedByIsbn: number };
   copies: { inserted: number; updated: number; skipped: number; relocated: number };
   loans: { inserted: number; updated: number; skipped: number; conflicts: number };
+  /** P0-3（02 §5.5） */
+  borrowers: { inserted: number; updated: number };
   /** 人话，可直接展示给用户；每一条都说明"是哪条、为什么" */
   warnings: string[];
   durationMs: number;
@@ -136,6 +142,45 @@ export function unionSorted(a: readonly string[], b: readonly string[]): string[
   return [...set].sort((x, y) => x.localeCompare(y, 'zh'));
 }
 
+/** 可合并记录的公共字段（03 §5.1）。 */
+export interface Mergeable {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * 字段级合并（03 §5.1）。放在本模块（共享叶子）供导入与借书人合并复用，
+ * 避免 backup/import.ts ↔ merge-borrowers.ts 互相引用。
+ * - 后写覆盖：incoming.updatedAt > local.updatedAt 时取 incoming 的业务字段
+ * - id 永远取 local.id（对齐的锚点）
+ * - createdAt 取两者较早者（同一实体不可能有两个创建时间）
+ * - unionFields 指定的数组字段取并集（标签不能丢）
+ * - changed 为 false 表示合并后与本地完全一致 → 不写库（幂等性的基础）
+ */
+export function mergeRecord<T extends Mergeable>(
+  local: T,
+  incoming: T,
+  unionFields: readonly string[] = [],
+): { record: T; changed: boolean } {
+  const incomingWins = incoming.updatedAt > local.updatedAt;
+  const record = {
+    ...(incomingWins ? incoming : local),
+    id: local.id,
+    createdAt: earliest(local.createdAt, incoming.createdAt),
+  } as T;
+
+  for (const field of unionFields) {
+    const a = (local as unknown as Record<string, unknown>)[field];
+    const b = (incoming as unknown as Record<string, unknown>)[field];
+    if (Array.isArray(a) && Array.isArray(b)) {
+      (record as unknown as Record<string, unknown>)[field] = unionSorted(a as string[], b as string[]);
+    }
+  }
+
+  return { record, changed: !deepEqual(record, local) };
+}
+
 /* ------------------------------------------------------------------ *
  * 清洗：宽进严出（§3.1）。未知字段一律丢弃，只按显式字段清单构造对象。
  * ------------------------------------------------------------------ */
@@ -205,6 +250,11 @@ const LOAN_FIELDS: readonly MissingFieldRule[] = [
   ['returnDate', '已按空日期导入'],
   ['status', '已按默认值（active）导入'],
   ['note', '已按空串导入'],
+];
+
+const BORROWER_FIELDS: readonly MissingFieldRule[] = [
+  ['name', '已按空串导入'],
+  ['contact', '已按空串导入'],
 ];
 
 /**
@@ -382,6 +432,22 @@ function sanitizeLoan(raw: unknown, ctx: SanitizeContext): Loan | null {
   };
 }
 
+function sanitizeBorrower(raw: unknown, ctx: SanitizeContext): Borrower | null {
+  if (raw === null || typeof raw !== 'object') {
+    ctx.warn('借书人列表中存在非对象记录，已跳过');
+    return null;
+  }
+  const row = raw as Record<string, unknown>;
+  if (!isValidId(row['id'])) {
+    ctx.warn('借书人记录缺少 id，已丢弃该条');
+    return null;
+  }
+  const id = row['id'] as string;
+  warnMissingFields(ctx, `借书人 ${id}`, row, BORROWER_FIELDS);
+  const { createdAt, updatedAt } = sanitizeTimestamps(ctx, `借书人 ${id}`, row);
+  return { id, name: asString(row['name']), contact: asString(row['contact']), createdAt, updatedAt };
+}
+
 function sanitizeArray<T>(
   value: unknown,
   field: string,
@@ -471,10 +537,22 @@ export function parseBackup(text: string): ParseResult {
   const books = sanitizeArray(sections['books'], 'books', context, sanitizeBook);
   const copies = sanitizeArray(sections['copies'], 'copies', context, sanitizeCopy);
   const loans = sanitizeArray(sections['loans'], 'loans', context, sanitizeLoan);
+  // 03 §3.1：schemaVersion 1 的老文件没有 borrowers 段 —— 视为空数组且**不警告**（正常形态不是损坏）；
+  // 字段存在但不是数组时仍走 sanitizeArray 的警告路径（那是被手改坏的形态）
+  const borrowers =
+    sections['borrowers'] === undefined
+      ? []
+      : sanitizeArray(sections['borrowers'], 'borrowers', context, sanitizeBorrower);
 
   // counts 只作人工核对，与内容不符时提示（导入本身以内容为准，见 §3.2）
-  const actual = { locations: locations.length, books: books.length, copies: copies.length, loans: loans.length };
-  for (const key of ['locations', 'books', 'copies', 'loans'] as const) {
+  const actual = {
+    locations: locations.length,
+    books: books.length,
+    copies: copies.length,
+    loans: loans.length,
+    borrowers: borrowers.length,
+  };
+  for (const key of ['locations', 'books', 'copies', 'loans', 'borrowers'] as const) {
     const declared = countOf(key);
     if (declared !== 0 && declared !== actual[key]) {
       warnings.add(`备份文件声明的 ${key} 数量（${declared}）与实际内容（${actual[key]}）不一致，已以内容为准`);
@@ -488,7 +566,7 @@ export function parseBackup(text: string): ParseResult {
     exportedAt,
     deviceName: asString(file['deviceName']),
     counts: actual,
-    data: { locations, books, copies, loans },
+    data: { locations, books, copies, loans, borrowers },
   };
 
   return { ok: true, backup, warnings: warnings.list() };
@@ -512,6 +590,7 @@ export function serializeBackup(backup: BackupFile): string {
         books: byId(backup.data.books),
         copies: byId(backup.data.copies),
         loans: byId(backup.data.loans),
+        borrowers: byId(backup.data.borrowers),
       },
     },
     null,

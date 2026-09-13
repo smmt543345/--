@@ -7,12 +7,15 @@
  *
  * 阶段 B2 的另外两个入口（规范 05）：
  * - 「AI 补全」：书名/ISBN → OpenAI 兼容服务 → 只填空字段（05 §3.3）；
- * - 「批量导入」：粘贴书单或 CSV 文件 → 只建书目不建副本，跳过规则见 05 §2.2。
+ * - 「批量导入」：粘贴 / CSV / Excel，整块在 BulkImportSection（04 §11.1、05 §2）。
+ *
+ * 表单记忆（04 §11.2）：挂载时用 applyDraftPrefs 回填位置/品相/标签，保存成功后
+ * 用 rememberDraftPrefs 记住这一次 —— 连录几十本时不必每次重选。
  *
  * 保存成功后跳到书目详情页 —— 那里可以继续加副本、借出。
  */
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { useDb } from '../../app/db-context.ts';
@@ -38,18 +41,14 @@ import { parsePositiveInt } from '../../domain/text.ts';
 import { COPY_CONDITIONS } from '../../domain/types.ts';
 import type { Book, CopyCondition, Location } from '../../domain/types.ts';
 import { completeChat, isAiConfigured, type AiConfig } from '../../platform/ai.ts';
-import { pickTextFile } from '../../platform/files.ts';
 import { AI_SYSTEM_PROMPT, buildAiUserPrompt, mergeAiFields, parseAiResponse } from './ai.ts';
-import {
-  bulkImportBooks,
-  parseCsvText,
-  parsePasteText,
-  type BulkImportReport,
-} from './import.ts';
+import { BulkImportSection } from './BulkImportSection.tsx';
 import {
   EMPTY_DRAFT,
   MAX_INITIAL_COUNT,
+  applyDraftPrefs,
   isbnNotice,
+  rememberDraftPrefs,
   submitBook,
   suspectedDuplicates,
   validateDraft,
@@ -76,6 +75,19 @@ export function NewBookPage(): ReactNode {
 
   const locations = useLiveQuery<Location[]>(async () => listLocations(db), [db], []);
   const books = useLiveQuery<Book[]>(async () => listBooks(db), [db], []);
+
+  // 表单记忆（04 §11.2）：挂载时回填上次的位置/品相/标签，其余字段始终空白。
+  // 只在草稿还没被动过时才回填 —— 用户已经动手敲了字，他填的比记忆重要。
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      const remembered = await applyDraftPrefs(db, EMPTY_DRAFT);
+      if (active) setDraft((previous) => (previous === EMPTY_DRAFT ? remembered : previous));
+    })();
+    return () => {
+      active = false;
+    };
+  }, [db]);
 
   const locationOptions: SelectOption[] = [
     { value: '', label: '未分类（默认）' },
@@ -120,39 +132,6 @@ export function NewBookPage(): ReactNode {
     })();
   }
 
-  /* ---------------- 批量导入（05 §2） ---------------- */
-
-  const bulkAction = useAsyncAction();
-  const [pasteText, setPasteText] = useState('');
-  const [csvName, setCsvName] = useState<string | null>(null);
-  const [bulkReport, setBulkReport] = useState<BulkImportReport | null>(null);
-
-  function runPasteImport(): void {
-    const rows = parsePasteText(pasteText);
-    if (rows.length === 0) {
-      setBulkReport({ created: 0, skipped: [{ line: 0, reason: '没有解析出任何书目（每行一本：书名，作者，ISBN）' }], suspected: [] });
-      return;
-    }
-    void bulkAction.run(async () => {
-      setBulkReport(await bulkImportBooks(db, rows));
-      setPasteText('');
-    });
-  }
-
-  function runCsvImport(): void {
-    void bulkAction.run(async () => {
-      const file = await pickTextFile('.csv,text/csv');
-      if (file === null) return;
-      const rows = parseCsvText(file.text);
-      if (rows.length === 0) {
-        setBulkReport({ created: 0, skipped: [{ line: 0, reason: 'CSV 里没有解析出任何书目' }], suspected: [] });
-        return;
-      }
-      setCsvName(file.name);
-      setBulkReport(await bulkImportBooks(db, rows));
-    });
-  }
-
   /* ---------------- 保存 ---------------- */
 
   function submit(options: SubmitOptions = {}): void {
@@ -174,6 +153,9 @@ export function NewBookPage(): ReactNode {
         setMergeIntoId(result.existing[0]?.id ?? '');
         return;
       }
+      // 保存成功后才记（04 §11.2）：位置/品相/标签下次进新增页时回填，
+      // 连录几十本时不用每次重选
+      await rememberDraftPrefs(db, candidate);
       // created / merged 都去详情页：接着加副本、借出都在那里
       navigate(`/books/${result.book.id}`);
     });
@@ -320,60 +302,8 @@ export function NewBookPage(): ReactNode {
         </div>
       </Card>
 
-      {/* ---------------- 批量导入（05 §2） ---------------- */}
-      <Card className="space-y-3 p-4">
-        <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">批量导入书目</h2>
-        <p className="text-sm text-neutral-600 dark:text-neutral-300">
-          把一整份书单一次导入。只建书目不建副本（副本是实物，之后在详情页加）；重复的书自动跳过。
-        </p>
-        <TextAreaField
-          label="粘贴书单"
-          value={pasteText}
-          onValueChange={setPasteText}
-          rows={6}
-          hint="每行一本：书名 ／ 书名，作者 ／ 书名，作者，ISBN ／ 纯 ISBN"
-          placeholder={'活着，余华\n三体，刘慈欣\n9787108061690'}
-        />
-        <div className="flex flex-wrap gap-2">
-          <Button variant="primary" onClick={runPasteImport} disabled={bulkAction.pending || pasteText.trim() === ''}>
-            {bulkAction.pending ? '导入中…' : '导入粘贴的书单'}
-          </Button>
-          <Button onClick={runCsvImport} disabled={bulkAction.pending}>
-            从 CSV 文件导入…
-          </Button>
-          {csvName !== null && <span className="self-center text-xs text-neutral-500 dark:text-neutral-400">已导入：{csvName}</span>}
-        </div>
-        {bulkAction.error !== null && <InlineError>{bulkAction.error}</InlineError>}
-        {bulkReport !== null && (
-          <div className="space-y-2 border-t border-neutral-200 pt-3 dark:border-neutral-800">
-            <p className="text-sm text-neutral-800 dark:text-neutral-200">
-              ✅ 新建 {bulkReport.created} 本
-              {bulkReport.skipped.length > 0 && <span className="text-neutral-500 dark:text-neutral-400"> · ⏭ 跳过 {bulkReport.skipped.length} 条</span>}
-              {bulkReport.suspected.length > 0 && <span className="text-amber-700 dark:text-amber-300"> · ⚠ 疑似重复 {bulkReport.suspected.length} 条</span>}
-            </p>
-            {bulkReport.skipped.length > 0 && (
-              <ul className="list-disc space-y-1 pl-5 text-xs text-neutral-500 dark:text-neutral-400">
-                {bulkReport.skipped.map((item) => (
-                  <li key={`${item.line}-${item.reason}`}>
-                    {item.line > 0 ? `第 ${item.line} 行：` : ''}
-                    {item.reason}
-                  </li>
-                ))}
-              </ul>
-            )}
-            {bulkReport.suspected.length > 0 && (
-              <p className="text-xs text-amber-700 dark:text-amber-300">
-                疑似重复（已创建）：{bulkReport.suspected.map((item) => `第 ${item.line} 行《${item.title}》`).join('、')}——如果其实是同一本书，去详情页合并副本即可。
-              </p>
-            )}
-            {bulkReport.created > 0 && (
-              <Button variant="ghost" onClick={() => navigate('/search')}>
-                去搜索页看看 →
-              </Button>
-            )}
-          </div>
-        )}
-      </Card>
+      {/* 批量导入（04 §11.1、05 §2）：整块是独立的导入流水线，拆在 BulkImportSection 里 */}
+      <BulkImportSection />
     </div>
   );
 }

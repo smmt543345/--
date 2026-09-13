@@ -5,6 +5,7 @@
 import { openDb } from '../db/client.ts';
 import { repairInvariants } from '../db/repair.ts';
 import type { PocketLibraryDb } from '../db/schema.ts';
+import { expireUndo } from '../db/snapshots.ts';
 import { requestPersistentStorage } from '../platform/storage.ts';
 
 export interface BootstrapResult {
@@ -19,5 +20,7 @@ export async function bootstrapApp(): Promise<BootstrapResult> {
   const persisted = await requestPersistentStorage();
   const db = await openDb();
   const report = await repairInvariants(db);
+  // 04 §4：撤销不跨会话 —— 启动时清理全部 undo 快照（撤销横幅是会话内 UI 状态）
+  await expireUndo(db, { olderThanMs: 0 });
   return { db, repairWarnings: report.warnings, persisted };
 }

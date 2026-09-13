@@ -7,18 +7,20 @@
 
 import {
   createBook,
-  deleteBook,
   findBooksByIsbn,
   normalizeTitle,
   updateBook,
   type CreateBookInput,
   type UpdateBookInput,
 } from '../../db/books.ts';
-import { createCopy, deleteCopy, listCopiesByBook } from '../../db/copies.ts';
+import { createCopy } from '../../db/copies.ts';
 import type { PocketLibraryDb } from '../../db/schema.ts';
+import { SETTING_KEYS, bumpWriteCounter, getSetting, setSetting } from '../../db/settings.ts';
+import { captureUndo } from '../../db/snapshots.ts';
 import { normalizeIsbn } from '../../domain/isbn.ts';
 import { parseList } from '../../domain/text.ts';
 import { isDateString } from '../../domain/time.ts';
+import { COPY_CONDITIONS } from '../../domain/types.ts';
 import type { Book, CopyCondition } from '../../domain/types.ts';
 
 /* ------------------------------------------------------------------ *
@@ -201,6 +203,61 @@ export async function submitBook(
   return { kind: merging ? 'merged' : 'created', book, copies: draft.initialCount };
 }
 
+/* ------------------------------------------------------------------ *
+ * 表单记忆（04 §11.2）
+ * ------------------------------------------------------------------ */
+
+/** 被记住的三个字段：位置、品相、标签。**其余字段永远不记**（04 §11.2）。 */
+export interface DraftPrefs {
+  locationId: string;
+  condition: CopyCondition;
+  tagsRaw: string;
+}
+
+/**
+ * 保存成功后调用：把这一次的位置/品相/标签写进 settings（设备专属，不进备份 —— 03 §2）。
+ * 走到这里说明已经保存成功，所以不必先校验草稿。
+ */
+export async function rememberDraftPrefs(db: PocketLibraryDb, draft: BookDraft): Promise<void> {
+  const prefs: DraftPrefs = {
+    locationId: draft.locationId.trim(),
+    condition: draft.condition,
+    tagsRaw: draft.tagsRaw,
+  };
+  await setSetting(db, SETTING_KEYS.lastDraftPrefs, prefs);
+}
+
+/**
+ * 进入新增页时调用：**只回填位置/品相/标签**，其余字段保持草稿原样（04 §11.2）。
+ *
+ * settings 里的值可能是上一版程序写的（甚至被手工改坏），所以逐字段校验，坏的那项
+ * 按「没记过」处理；位置已被删除时也丢弃 —— 否则表单会带着一个不存在的 id，
+ * 保存时才在 createCopy 里炸出「位置不存在」，用户完全看不懂。
+ */
+export async function applyDraftPrefs(db: PocketLibraryDb, draft: BookDraft): Promise<BookDraft> {
+  const prefs = readDraftPrefs(await getSetting<unknown>(db, SETTING_KEYS.lastDraftPrefs, null));
+  if (prefs === null) return draft;
+
+  let locationId = prefs.locationId;
+  if (locationId !== '') {
+    const location = await db.locations.get(locationId);
+    if (location === undefined) locationId = '';
+  }
+  return { ...draft, locationId, condition: prefs.condition, tagsRaw: prefs.tagsRaw };
+}
+
+/** settings 里的记忆值 → DraftPrefs；一条都没记过（settings 默认值 {}）返回 null。 */
+function readDraftPrefs(value: unknown): DraftPrefs | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const raw = value as Record<string, unknown>;
+  const condition =
+    typeof raw.condition === 'string' ? (COPY_CONDITIONS.find((item) => item === raw.condition) ?? null) : null;
+  const locationId = typeof raw.locationId === 'string' ? raw.locationId.trim() : '';
+  const tagsRaw = typeof raw.tagsRaw === 'string' ? raw.tagsRaw : '';
+  if (condition === null && locationId === '' && tagsRaw === '') return null;
+  return { locationId, condition: condition ?? EMPTY_DRAFT.condition, tagsRaw };
+}
+
 export interface DeleteBookOptions {
   /** 02 §9：级联删除不可逆，`strategy` 必须在签名里显式传参，不允许作为默认值 */
   strategy: 'cascade';
@@ -211,18 +268,35 @@ export interface DeleteBookOptions {
 /**
  * 连副本一起删除书目（02 §9：deleteBook 有副本时拒绝，级联必须显式发生）。
  * 副本正被借出时需 confirmLentOut —— 与 deleteCopy 的语义一致。
+ *
+ * 02 §9.1：同一事务内先捕获 undo 快照（书目 + 副本 + 借出全量）再删 ——
+ * 不委托 deleteCopy（那会按副本维度各拍一份 undo，互相顶掉）。
  */
 export async function deleteBookCompletely(
   db: PocketLibraryDb,
   bookId: string,
   options: DeleteBookOptions,
 ): Promise<{ copies: number; loans: number }> {
-  const copies = await listCopiesByBook(db, bookId);
-  let loans = 0;
-  for (const copy of copies) {
-    const result = await deleteCopy(db, copy.id, options);
-    loans += result.deletedLoans;
-  }
-  await deleteBook(db, bookId);
-  return { copies: copies.length, loans };
+  return db.transaction('rw', db.books, db.copies, db.loans, db.snapshots, db.settings, async () => {
+    const book = await db.books.get(bookId);
+    if (book === undefined) throw new Error(`书目不存在：${bookId}`);
+
+    const copies = await db.copies.where('bookId').equals(bookId).toArray();
+    const copyIds = new Set(copies.map((c) => c.id));
+    const loans = (await db.loans.toArray()).filter((l) => copyIds.has(l.copyId));
+
+    const active = loans.filter((l) => l.status === 'active');
+    if (active.length > 0 && options.confirmLentOut !== true) {
+      const who = active[0]?.borrower ?? '';
+      throw new Error(`该副本正被「${who}」借出，删除前请确认（confirmLentOut: true）`);
+    }
+
+    await captureUndo(db, { books: [book], copies, loans });
+
+    await db.loans.bulkDelete(loans.map((l) => l.id));
+    await db.copies.bulkDelete(copies.map((c) => c.id));
+    await db.books.delete(bookId);
+    await bumpWriteCounter(db);
+    return { copies: copies.length, loans: loans.length };
+  });
 }

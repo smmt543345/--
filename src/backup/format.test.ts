@@ -226,7 +226,7 @@ describe('备份文件解析（03 §3）', () => {
     if (!result.ok) return;
     assert.equal(result.backup.data.books.length, 1);
     assert.ok(result.warnings.some((w) => w.includes('books') && w.includes('99')));
-    assert.deepEqual(result.backup.counts, { locations: 0, books: 1, copies: 0, loans: 0 });
+    assert.deepEqual(result.backup.counts, { locations: 0, books: 1, copies: 0, loans: 0, borrowers: 0 });
   });
 
   it('缺失的数据段按空列表处理并警告', () => {

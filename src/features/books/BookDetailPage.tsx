@@ -6,11 +6,11 @@
  *   `MANUAL_COPY_STATUSES`，借出/归还只能走 `lendCopy` / `returnLoan`。
  * - 标为 `lost`/`sold` 会连带关闭进行中的借出（02 §6 I7），所以那一排按钮的
  *   hint 必须把后果说清楚。
- * - 删除是不可逆的（02 §9）：确认文案里的数量全部来自 `detail` 的真实数据，
- *   副本正被借出时还要用户勾一次显式确认，勾完才把 `confirmLentOut: true` 传下去。
+ * - 删除（02 §9）：确认文案里的数量全部来自 `detail` 的真实数据，副本正被借出时还要用户勾一次
+ *   显式确认，勾完才把 `confirmLentOut: true` 传下去；删除后 30 秒内可撤销（§9.1、04 §6）。
  */
 
-import { useRef, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { useDb } from '../../app/db-context.ts';
@@ -52,7 +52,6 @@ import {
   setCopyStatus,
   updateCopy,
 } from '../../db/copies.ts';
-import { getActiveLoanForCopy } from '../../db/loans.ts';
 import { listLocations } from '../../db/locations.ts';
 import { UNSORTED_LOCATION_ID } from '../../domain/ids.ts';
 import { normalizeIsbn } from '../../domain/isbn.ts';
@@ -66,6 +65,7 @@ import type {
   CopyWithLocation,
   Location,
 } from '../../domain/types.ts';
+import { BorrowForm } from './BorrowForm.tsx';
 import {
   EMPTY_DRAFT,
   MAX_INITIAL_COUNT,
@@ -75,14 +75,7 @@ import {
   validateDraft,
   type BookDraft,
 } from './write.ts';
-import {
-  defaultDueDateFor,
-  emptyLoanDraft,
-  lendCopy,
-  returnLoan,
-  validateLoanDraft,
-  type LoanDraft,
-} from '../loans/write.ts';
+import { lendCopy, returnLoan, type LoanDraft } from '../loans/write.ts';
 
 /* ------------------------------------------------------------------ *
  * 选项清单：直接用 types.ts 的 as const 清单渲染，不另抄一份（04 §5）
@@ -257,11 +250,6 @@ export function BookDetailPage(): ReactNode {
   const [addError, setAddError] = useState<string | null>(null);
 
   const [lendTarget, setLendTarget] = useState<CopyWithLocation | null>(null);
-  // 借出对话框当前的目标。预检 Promise 回来时对话框可能已换成另一本副本，
-  // 回调里要拿它比对，别把 A 的检查结果显示在 B 的对话框上
-  const lendTargetRef = useRef<CopyWithLocation | null>(null);
-  const [lendDraft, setLendDraft] = useState<LoanDraft>(() => emptyLoanDraft());
-  const [lendError, setLendError] = useState<string | null>(null);
 
   const [returnTarget, setReturnTarget] = useState<CopyWithLocation | null>(null);
   const [returnDate, setReturnDate] = useState(() => today());
@@ -384,54 +372,24 @@ export function BookDetailPage(): ReactNode {
 
   /* ---------------- 借出 / 归还 ---------------- */
 
+  // 表单本体（借书人候选、默认应还日期、校验、预检）在 BorrowForm 里（04 §11.3/§11.7）：
+  // 这里只管打开哪一本、把写操作状态传给对话框
   function openLend(copy: CopyWithLocation): void {
     dialogAction.clearError();
-    setLendError(null);
     setLendTarget(copy);
-    lendTargetRef.current = copy;
-    const fresh = emptyLoanDraft();
-    setLendDraft(fresh);
-
-    // 应还日期按设置里的借期推算（共享原件，页面不自己算 30 天）；取不到就留空＝不设
-    void defaultDueDateFor(db, fresh.loanDate).then(
-      (due) => {
-        if (lendTargetRef.current?.id !== copy.id) return; // 对话框已换成另一本副本
-        setLendDraft((previous) => (previous.dueDate === '' ? { ...previous, dueDate: due } : previous));
-      },
-      () => undefined,
-    );
-
-    // liveQuery 的结果可能落后于别的标签页：先探一次进行中的借出，
-    // 免得用户填完一整屏表单才被 service 拒绝（service 仍然会再挡一次）
-    void getActiveLoanForCopy(db, copy.id).then(
-      (active) => {
-        if (lendTargetRef.current?.id !== copy.id) return; // 对话框已换成另一本副本
-        if (active !== undefined) setLendError(`该副本已经借给「${active.borrower}」，请先归还再借出`);
-      },
-      () => undefined,
-    );
   }
 
   function closeLend(): void {
-    lendTargetRef.current = null;
     setLendTarget(null);
-    setLendError(null);
     dialogAction.clearError();
   }
 
-  function confirmLend(): void {
+  function confirmLend(draft: LoanDraft): void {
     const target = lendTarget;
     if (target === null) return;
-    const problem = validateLoanDraft(lendDraft);
-    if (problem !== null) {
-      setLendError(problem);
-      return;
-    }
-    setLendError(null);
     void dialogAction.run(async () => {
       // dueDate 传空串＝不设到期日（db 层区分 undefined 与空串）
-      await lendCopy(db, { copyId: target.id, ...lendDraft });
-      lendTargetRef.current = null;
+      await lendCopy(db, { copyId: target.id, ...draft });
       setLendTarget(null);
     });
   }
@@ -746,48 +704,21 @@ export function BookDetailPage(): ReactNode {
         open={lendTarget !== null}
         title="借出这本副本"
         onClose={closeLend}
-        footer={
-          <>
-            <Button onClick={closeLend} disabled={dialogAction.pending}>
-              取消
-            </Button>
-            <Button variant="primary" onClick={confirmLend} disabled={dialogAction.pending}>
-              {dialogAction.pending ? '处理中…' : '确认借出'}
-            </Button>
-          </>
-        }
       >
         {lendTarget !== null && (
-          <p className="text-xs text-neutral-500 dark:text-neutral-400">
-            位置：{locationPathText(lendTarget.locationPath)}
-          </p>
+          <BorrowForm
+            copyId={lendTarget.id}
+            context={
+              <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                位置：{locationPathText(lendTarget.locationPath)}
+              </p>
+            }
+            pending={dialogAction.pending}
+            error={dialogAction.error}
+            onSubmit={confirmLend}
+            onCancel={closeLend}
+          />
         )}
-        <TextField
-          label="借书人"
-          value={lendDraft.borrower}
-          onValueChange={(value) => setLendDraft({ ...lendDraft, borrower: value })}
-          hint="必填"
-        />
-        <TextField
-          label="联系方式"
-          value={lendDraft.contact}
-          onValueChange={(value) => setLendDraft({ ...lendDraft, contact: value })}
-          hint="手机号 / 微信 / 邮箱，可以留空"
-        />
-        <TextField
-          label="借出日期"
-          type="date"
-          value={lendDraft.loanDate}
-          onValueChange={(value) => setLendDraft({ ...lendDraft, loanDate: value })}
-        />
-        <TextField
-          label="应还日期"
-          type="date"
-          value={lendDraft.dueDate}
-          onValueChange={(value) => setLendDraft({ ...lendDraft, dueDate: value })}
-          hint="默认按设置里的借期推算；留空表示不设到期日"
-        />
-        {(lendError ?? dialogAction.error) !== null && <InlineError>{lendError ?? dialogAction.error}</InlineError>}
       </Modal>
 
       <ConfirmDialog
@@ -826,7 +757,7 @@ export function BookDetailPage(): ReactNode {
           deleteCopyTarget === null ? null : (
             <>
               将删除这本副本（{locationPathText(deleteCopyTarget.locationPath)}）和它的{' '}
-              {loanCountOf(deleteCopyTarget.id)} 条借出记录，无法撤销。
+              {loanCountOf(deleteCopyTarget.id)} 条借出记录；删除后 30 秒内可以在页面底部撤销。
               {deleteCopyTarget.activeLoan !== null && (
                 <span className="mt-2 block">
                   该副本正被「{deleteCopyTarget.activeLoan.borrower}」借出，那条进行中的借出记录会一起删掉。
@@ -867,7 +798,7 @@ export function BookDetailPage(): ReactNode {
                 其中 {borrowedCopies.length} 本正被借出（{borrowers.join('、')}）。
               </p>
             )}
-            <p className="mt-2">副本与借出记录会一并消失，无法撤销。</p>
+            <p className="mt-2">副本与借出记录会一并消失；删除后 30 秒内可以在页面底部撤销。</p>
           </>
         }
         onCancel={closeDeleteBook}

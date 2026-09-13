@@ -37,6 +37,7 @@ import {
 import { useLiveQuery } from '../../app/useLiveQuery.ts';
 import { searchBooks, type SearchBooksOptions } from '../../db/books.ts';
 import { listLocations } from '../../db/locations.ts';
+import { listAllTags } from '../../db/listing.ts';
 import { COPY_STATUSES, type BookSearchResult, type CopyStatus, type CopyWithLocation, type Location } from '../../domain/types.ts';
 
 /** 一屏放不下的结果没有意义；超了就让用户细化关键词（service 的 limit）。 */
@@ -44,6 +45,7 @@ const RESULT_LIMIT = 50;
 
 /** 「列全部」时的初始值，避免每次渲染都造一个新数组。 */
 const NO_LOCATIONS: readonly Location[] = [];
+const NO_TAGS: readonly string[] = [];
 
 type StatusFilter = 'all' | CopyStatus;
 
@@ -143,10 +145,12 @@ export function SearchPage(): ReactNode {
   const [keyword, setKeyword] = useState('');
   const [locationId, setLocationId] = useState('');
   const [status, setStatus] = useState<StatusFilter>('all');
+  const [tag, setTag] = useState('');
 
   const settledKeyword = useDebounced(keyword, 200);
 
   const locations = useLiveQuery(() => listLocations(db), [db], NO_LOCATIONS);
+  const tags = useLiveQuery(() => listAllTags(db), [db], NO_TAGS);
 
   const locationOptions = useMemo<readonly SelectOption[]>(
     () => [
@@ -159,6 +163,11 @@ export function SearchPage(): ReactNode {
     [locations],
   );
 
+  const tagOptions = useMemo<readonly SelectOption[]>(
+    () => [{ value: '', label: '全部标签' }, ...tags.map((item) => ({ value: item, label: item }))],
+    [tags],
+  );
+
   // 多要一条：拿它判断"还有更多"，就不必再跑一次 count（service 在排序后截断）
   const results = useLiveQuery<BookSearchResult[] | null>(
     async () => {
@@ -166,14 +175,15 @@ export function SearchPage(): ReactNode {
       if (settledKeyword.trim() !== '') options.keyword = settledKeyword;
       if (locationId !== '') options.locationId = locationId;
       if (status !== 'all') options.status = status;
+      if (tag !== '') options.tag = tag;
       return searchBooks(db, options);
     },
-    [db, settledKeyword, locationId, status],
+    [db, settledKeyword, locationId, status, tag],
     null,
   );
 
   const query = settledKeyword.trim();
-  const hasFilter = query !== '' || locationId !== '' || status !== 'all';
+  const hasFilter = query !== '' || locationId !== '' || status !== 'all' || tag !== '';
   // 位置/状态是副本维度的条件：命中后每条只带符合条件的副本，
   // 不加这句说明，用户会以为「我明明有 3 本，怎么只显示 1 本」。
   const copyFilterActive = locationId !== '' || status !== 'all';
@@ -184,6 +194,7 @@ export function SearchPage(): ReactNode {
     setKeyword('');
     setLocationId('');
     setStatus('all');
+    setTag('');
   };
 
   return (
@@ -206,6 +217,16 @@ export function SearchPage(): ReactNode {
           options={locationOptions}
           hint="选中一个位置时，连它的下级位置一起搜（与「位置」页的计数口径一致）"
         />
+        {/* 库里一个标签都没有时不占位置（04 §11.5） */}
+        {tags.length > 0 && (
+          <SelectField
+            label="标签"
+            value={tag}
+            onValueChange={setTag}
+            options={tagOptions}
+            hint="单独按标签搜时，只有标签、还没有实体副本的书也会列出来"
+          />
+        )}
         <ChoiceGroup label="副本状态" value={status} options={STATUS_FILTER_OPTIONS} onChange={setStatus} />
       </div>
 
@@ -215,7 +236,7 @@ export function SearchPage(): ReactNode {
         hasFilter ? (
           <EmptyState
             title="没找到符合条件的书"
-            hint="换个关键词试试，或者放宽位置与状态的筛选。刚到手还没录入的书，直接去新增一本。"
+            hint="换个关键词试试，或者放宽位置、标签与状态的筛选。刚到手还没录入的书，直接去新增一本。"
             action={
               <div className="flex flex-wrap justify-center gap-2">
                 <Button onClick={clearFilters}>清空筛选</Button>

@@ -17,12 +17,13 @@ export interface ExportOptions {
 
 /** 从数据层生成一份备份对象（不落盘；落盘由 platform 层决定）。 */
 export async function buildBackup(db: PocketLibraryDb, options: ExportOptions = {}): Promise<BackupFile> {
-  // 一次性读取四张表；不引入第二套序列化
-  const [locations, books, copies, loans] = await Promise.all([
+  // 一次性读取五张业务表；不引入第二套序列化
+  const [locations, books, copies, loans, borrowers] = await Promise.all([
     db.locations.toArray(),
     db.books.toArray(),
     db.copies.toArray(),
     db.loans.toArray(),
+    db.borrowers.toArray(),
   ]);
 
   const deviceName = options.deviceName ?? (await getSetting<string>(db, SETTING_KEYS.deviceName, ''));
@@ -38,8 +39,9 @@ export async function buildBackup(db: PocketLibraryDb, options: ExportOptions = 
       books: books.length,
       copies: copies.length,
       loans: loans.length,
+      borrowers: borrowers.length,
     },
-    data: { locations, books, copies, loans },
+    data: { locations, books, copies, loans, borrowers },
   };
 }
 

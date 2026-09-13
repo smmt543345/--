@@ -11,6 +11,7 @@ import { defaultDueDate, nowIso, today } from '../domain/time.ts';
 import type { Copy, Loan, LoanWithBook } from '../domain/types.ts';
 import type { PocketLibraryDb } from './schema.ts';
 import { SETTING_KEYS, bumpWriteCounter, getSetting } from './settings.ts';
+import { upsertBorrowerInTx } from './borrowers.ts';
 
 export interface LoanOutInput {
   copyId: string;
@@ -43,7 +44,7 @@ export async function loanOut(db: PocketLibraryDb, input: LoanOutInput): Promise
   const borrower = (input.borrower ?? '').trim();
   if (borrower === '') throw new Error('借书人不能为空');
 
-  return db.transaction('rw', db.copies, db.loans, db.settings, async () => {
+  return db.transaction('rw', db.copies, db.loans, db.settings, db.borrowers, async () => {
     const copy = await requireCopy(db, input.copyId);
     if (copy.status === 'lost' || copy.status === 'sold') {
       throw new Error(`副本当前状态为「${copy.status}」，不能借出`);
@@ -79,6 +80,8 @@ export async function loanOut(db: PocketLibraryDb, input: LoanOutInput): Promise
 
     // I7：状态由借出记录派生，不手工设置
     await db.copies.put({ ...copy, status: 'lent_out', updatedAt: stamp });
+    // 02 §5.5：借出成功后 upsert 借书人候选（按规范化姓名去重）
+    await upsertBorrowerInTx(db, { name: borrower, contact: loan.contact }, stamp);
     await bumpWriteCounter(db);
     return loan;
   });

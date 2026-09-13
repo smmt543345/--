@@ -162,6 +162,19 @@ describe('借出服务', () => {
     });
   });
 
+  it('借出成功后 upsert 借书人候选（02 §5.5）', async () => {
+    await withDb(async (db) => {
+      const book = await createBook(db, { title: '书' });
+      const copy = await createCopy(db, { bookId: book.id });
+      await loanOut(db, { copyId: copy.id, borrower: ' 张  三 ', contact: '111' });
+
+      const rows = await db.borrowers.toArray();
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]?.name, '张 三', '候选存规范化姓名');
+      assert.equal(rows[0]?.contact, '111');
+    });
+  });
+
   it('借阅历史按借出日期倒序，可按副本或按书目查', async () => {
     await withDb(async (db) => {
       const book = await createBook(db, { title: '书' });

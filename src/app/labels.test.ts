@@ -8,6 +8,11 @@ import {
   LOCATION_TYPES,
   LOAN_STATUSES,
   MATCH_FIELDS,
+  SNAPSHOT_KINDS,
+  type Book,
+  type Copy,
+  type Location,
+  type Snapshot,
 } from '../domain/types.ts';
 import { THEMES } from '../platform/theme.ts';
 import {
@@ -17,12 +22,15 @@ import {
   COPY_STATUS_LABELS,
   copyStatusTone,
   describeLastExport,
+  describeUndo,
   formatDateTime,
   IMPORT_MODE_LABELS,
   importSummaryRows,
   LOCATION_TYPE_LABELS,
   LOAN_STATUS_LABELS,
   MATCH_FIELD_LABELS,
+  SNAPSHOT_KIND_LABELS,
+  snapshotCountsText,
   THEME_LABELS,
 } from './labels.ts';
 
@@ -35,6 +43,7 @@ describe('标签完备性', () => {
     ['LocationType', LOCATION_TYPES, LOCATION_TYPE_LABELS],
     ['MatchField', MATCH_FIELDS, MATCH_FIELD_LABELS],
     ['Theme', THEMES, THEME_LABELS],
+    ['SnapshotKind', SNAPSHOT_KINDS, SNAPSHOT_KIND_LABELS],
   ];
 
   for (const [name, values, labels] of cases) {
@@ -97,6 +106,99 @@ describe('展示格式', () => {
   });
 });
 
+describe('快照与撤销的展示口径（04 §6、§11.4）', () => {
+  const STAMP = '2026-09-13T03:00:00.000Z';
+
+  function bookRow(id: string, title: string): Book {
+    return {
+      id,
+      isbn: '',
+      title,
+      authors: [],
+      publisher: '',
+      publishDate: '',
+      coverUrl: '',
+      tags: [],
+      createdAt: STAMP,
+      updatedAt: STAMP,
+    };
+  }
+
+  function copyRow(id: string): Copy {
+    return {
+      id,
+      bookId: 'b1',
+      locationId: 'l1',
+      status: 'on_shelf',
+      condition: 'unknown',
+      owner: '',
+      note: '',
+      createdAt: STAMP,
+      updatedAt: STAMP,
+    };
+  }
+
+  function locationRow(id: string): Location {
+    return {
+      id,
+      parentId: null,
+      name: '客厅',
+      path: '客厅',
+      depth: 1,
+      type: 'room',
+      sortOrder: 0,
+      createdAt: STAMP,
+      updatedAt: STAMP,
+    };
+  }
+
+  /** 只给 data 里真正被删掉的那几段，其余留空 —— 与 captureUndo 的部分数据形状一致（02 §9.1）。 */
+  function undoSnapshot(data: Partial<Snapshot['data']>): Snapshot {
+    const full: Snapshot['data'] = { locations: [], books: [], copies: [], loans: [], borrowers: [], ...data };
+    return {
+      id: 'undo-1',
+      kind: 'undo',
+      createdAt: STAMP,
+      summary: {
+        locations: full.locations.length,
+        books: full.books.length,
+        copies: full.copies.length,
+        loans: full.loans.length,
+        borrowers: full.borrowers.length,
+      },
+      data: full,
+    };
+  }
+
+  it('删书目级联：说出书名与连带删掉的副本', () => {
+    const text = describeUndo(undoSnapshot({ books: [bookRow('b1', '三体')], copies: [copyRow('c1'), copyRow('c2')] }));
+    assert.match(text, /已删除《三体》/);
+    assert.match(text, /2 本副本/);
+  });
+
+  it('删副本：没有书名时只报副本数，不编一个书名出来', () => {
+    assert.equal(describeUndo(undoSnapshot({ copies: [copyRow('c1')] })), '已删除 1 本副本');
+  });
+
+  it('删位置级联：位置与副本都算上', () => {
+    const text = describeUndo(undoSnapshot({ locations: [locationRow('l1')], copies: [copyRow('c1')] }));
+    assert.match(text, /1 个位置/);
+    assert.match(text, /1 本副本/);
+  });
+
+  it('空快照也给一句人话，不是「已删除」两个字的空话', () => {
+    assert.equal(describeUndo(undoSnapshot({})), '已删除一批数据');
+  });
+
+  it('计数只列非零项，空快照另说', () => {
+    assert.equal(snapshotCountsText(undoSnapshot({}).summary), '没有任何记录');
+    assert.equal(
+      snapshotCountsText({ locations: 0, books: 12, copies: 15, loans: 0, borrowers: 2 }),
+      '12 条书目 · 15 本副本 · 2 位借书人',
+    );
+  });
+});
+
 describe('importSummaryRows', () => {
   const summary: ImportSummary = {
     mode: 'merge',
@@ -105,6 +207,7 @@ describe('importSummaryRows', () => {
     books: { inserted: 3, updated: 0, mergedByIsbn: 1 },
     copies: { inserted: 4, updated: 0, skipped: 1, relocated: 2 },
     loans: { inserted: 0, updated: 1, skipped: 0, conflicts: 1 },
+    borrowers: { inserted: 0, updated: 0 },
     warnings: [],
     durationMs: 12,
   };

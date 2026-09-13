@@ -33,6 +33,7 @@ import { attachLoanDetails, listActiveLoans, listLoanHistory, listOverdueLoans }
 import { daysSince, isOverdue, today } from '../../domain/time.ts';
 import type { LoanWithBook } from '../../domain/types.ts';
 import { returnLoan } from './write.ts';
+import { QuickLendDialog } from './QuickLendDialog.tsx';
 
 /** 历史每次多显示这么多条：一次铺开几百条记录在手机上没法用。 */
 const HISTORY_PAGE_SIZE = 10;
@@ -72,6 +73,7 @@ export function LoansPage(): ReactNode {
   const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE_SIZE);
   const [returnTarget, setReturnTarget] = useState<LoanWithBook | null>(null);
   const [returnDate, setReturnDate] = useState(() => today());
+  const [lendOpen, setLendOpen] = useState(false);
 
   const active = useLiveQuery<LoanWithBook[] | null>(async () => sortActiveLoans(await listActiveLoans(db)), [db], null);
   const overdue = useLiveQuery<LoanWithBook[] | null>(async () => listOverdueLoans(db), [db], null);
@@ -115,12 +117,20 @@ export function LoansPage(): ReactNode {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="借出" description="谁借走了、什么时候该还，都记在这里。" />
+      <PageHeader
+        title="借出"
+        description="谁借走了、什么时候该还，都记在这里。"
+        actions={
+          <Button variant="primary" onClick={() => setLendOpen(true)}>
+            ＋ 快速借出
+          </Button>
+        }
+      />
 
       {nothingAtAll ? (
         <EmptyState
           title="还没有借出记录"
-          hint="去书目详情页把某本副本借出去，这里就会记下来。"
+          hint="点右上角「＋ 快速借出」，或者去书目详情页把某本副本借出去，这里就会记下来。"
           action={
             <Button variant="primary" onClick={() => navigate('/search')}>
               去找一本书
@@ -241,8 +251,11 @@ export function LoansPage(): ReactNode {
         </>
       )}
 
+      {/* 快速借出（04 §11.7）：选书 → 选在架副本 → 填借出信息，不跳详情页 */}
+      <QuickLendDialog open={lendOpen} onClose={() => { setLendOpen(false); }} />
+
       {/* 对话框开着的时候错误显示在对话框里，不在页面上重复一遍 */}
-      {action.error !== null && returnTarget === null && <InlineError>{action.error}</InlineError>}
+      {action.error !== null && returnTarget === null && !lendOpen && <InlineError>{action.error}</InlineError>}
 
       <ConfirmDialog
         open={returnTarget !== null}

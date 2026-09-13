@@ -173,6 +173,32 @@ describe('位置服务', () => {
     });
   });
 
+  it('cascade 删除前在同一事务内挂 undo 快照（02 §9.1）', async () => {
+    await withDb(async (db) => {
+      const home = await createLocation(db, { name: '家' });
+      const living = await createLocation(db, { name: '客厅', parentId: home.id });
+      const book = await createBook(db, { title: '书' });
+      await createCopy(db, { bookId: book.id, locationId: living.id });
+      await loanOut(db, { copyId: (await db.copies.toArray())[0]?.id ?? '', borrower: '小王' });
+
+      await deleteLocation(db, home.id, 'cascade');
+      const undo = await db.snapshots.where('kind').equals('undo').first();
+      assert.ok(undo);
+      assert.equal(undo.data.locations.length, 2, '被删子树全部捕获');
+      assert.equal(undo.data.copies.length, 1);
+      assert.equal(undo.data.loans.length, 1);
+    });
+  });
+
+  it('reparent 不产生 undo 快照', async () => {
+    await withDb(async (db) => {
+      const home = await createLocation(db, { name: '家' });
+      await createLocation(db, { name: '客厅', parentId: home.id });
+      await deleteLocation(db, home.id, 'reparent');
+      assert.equal(await db.snapshots.where('kind').equals('undo').count(), 0, '没有数据被销毁，不产生 undo');
+    });
+  });
+
   it('叶子位置可以不带策略直接删', async () => {
     await withDb(async (db) => {
       const home = await createLocation(db, { name: '家' });

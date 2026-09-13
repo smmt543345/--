@@ -92,6 +92,37 @@ export interface Setting {
   updatedAt: string;
 }
 
+/** 借书人候选（02 §5.5）：无外键，与 Loan 解耦；Loan.borrower 是历史字符串快照。 */
+export interface Borrower {
+  id: string;
+  /** 一律存规范化姓名（trim + 折叠连续空白），查重键 */
+  name: string;
+  contact: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const SNAPSHOT_KINDS = ['auto', 'undo', 'pre-restore'] as const;
+export type SnapshotKind = (typeof SNAPSHOT_KINDS)[number];
+
+/**
+ * 快照（02 §12）：删除撤销与全库回滚共用一张表。
+ * data 的形状与备份文件 data 段完全一致，复用同一套序列化路径。
+ */
+export interface Snapshot {
+  id: string;
+  kind: SnapshotKind;
+  createdAt: string;
+  summary: { locations: number; books: number; copies: number; loans: number; borrowers: number };
+  data: {
+    locations: Location[];
+    books: Book[];
+    copies: Copy[];
+    loans: Loan[];
+    borrowers: Borrower[];
+  };
+}
+
 /* ------------------------------------------------------------------ *
  * 组合视图（供 UI 直接使用，避免页面自己联表）
  * ------------------------------------------------------------------ */

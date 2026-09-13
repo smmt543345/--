@@ -66,15 +66,18 @@ export function previewMatchesChoice(
  * ------------------------------------------------------------------ */
 
 /** 「N 条书目、M 本副本…」—— 两处确认框共用一份口径。 */
-export function describeLibraryCounts(counts: BackupCounts): string {
+/** 确认文案只用到的计数（borrowers 不展示）；BackupCounts 与 LibraryCounts 都兼容。 */
+type LibraryCountsLike = Pick<BackupCounts, 'locations' | 'books' | 'copies' | 'loans'>;
+
+export function describeLibraryCounts(counts: LibraryCountsLike): string {
   return `${counts.books} 条书目、${counts.copies} 本副本、${counts.locations} 个位置、${counts.loans} 条借出记录`;
 }
 
-export function describeClearAllData(counts: BackupCounts): string {
+export function describeClearAllData(counts: LibraryCountsLike): string {
   return `将删除本机的 ${describeLibraryCounts(counts)}。删除后无法撤销，只能靠之前导出的备份文件恢复。主题与设备名属于本机偏好，会保留。`;
 }
 
-export function describeReplaceImport(counts: BackupCounts, preview: ImportSummary): string {
+export function describeReplaceImport(counts: LibraryCountsLike, preview: ImportSummary): string {
   const incoming = `书目 ${preview.books.inserted} 条、副本 ${preview.copies.inserted} 本、位置 ${preview.locations.inserted} 个`;
   return `替换会先清空本机的 ${describeLibraryCounts(counts)}，再写入文件里的 ${incoming}。本机现有的借出记录也会一并清掉，无法撤销。`;
 }

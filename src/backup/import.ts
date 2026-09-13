@@ -8,18 +8,20 @@
  */
 
 import { UNSORTED_LOCATION_ID } from '../domain/ids.ts';
-import { earliest, nowIso } from '../domain/time.ts';
+import { nowIso } from '../domain/time.ts';
 import type { Book, Copy, Loan, Location } from '../domain/types.ts';
 import { unsortedLocation } from '../db/client.ts';
 import { rebuildLocationPaths } from '../db/locations.ts';
 import { getActiveLoanForCopy } from '../db/loans.ts';
 import { repairInvariants } from '../db/repair.ts';
 import type { PocketLibraryDb } from '../db/schema.ts';
+import { bumpWriteCounterBy } from '../db/settings.ts';
+import { mergeBorrowers } from './merge-borrowers.ts';
 import {
   createWarningCollector,
   deepEqual,
+  mergeRecord,
   parseBackup,
-  unionSorted,
   type BackupFile,
   type ImportMode,
   type ImportOptions,
@@ -29,43 +31,6 @@ import {
 /** 空事务回滚信号：预览 = 「完整跑一遍然后整体回滚」（03 §7）。 */
 const DRY_RUN_SIGNAL = { dryRun: true } as const;
 
-interface Mergeable {
-  id: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/**
- * 字段级合并（03 §5.1）。
- * - 后写覆盖：incoming.updatedAt > local.updatedAt 时取 incoming 的业务字段
- * - id 永远取 local.id（对齐的锚点）
- * - createdAt 取两者较早者（同一实体不可能有两个创建时间）
- * - unionFields 指定的数组字段取并集（标签不能丢）
- * - changed 为 false 表示合并后与本地完全一致 → 不写库（幂等性的基础）
- */
-export function mergeRecord<T extends Mergeable>(
-  local: T,
-  incoming: T,
-  unionFields: readonly string[] = [],
-): { record: T; changed: boolean } {
-  const incomingWins = incoming.updatedAt > local.updatedAt;
-  const record = {
-    ...(incomingWins ? incoming : local),
-    id: local.id,
-    createdAt: earliest(local.createdAt, incoming.createdAt),
-  } as T;
-
-  for (const field of unionFields) {
-    const a = (local as unknown as Record<string, unknown>)[field];
-    const b = (incoming as unknown as Record<string, unknown>)[field];
-    if (Array.isArray(a) && Array.isArray(b)) {
-      (record as unknown as Record<string, unknown>)[field] = unionSorted(a as string[], b as string[]);
-    }
-  }
-
-  return { record, changed: !deepEqual(record, local) };
-}
-
 function emptySummary(mode: ImportMode, dryRun: boolean): ImportSummary {
   return {
     mode,
@@ -74,6 +39,7 @@ function emptySummary(mode: ImportMode, dryRun: boolean): ImportSummary {
     books: { inserted: 0, updated: 0, mergedByIsbn: 0 },
     copies: { inserted: 0, updated: 0, skipped: 0, relocated: 0 },
     loans: { inserted: 0, updated: 0, skipped: 0, conflicts: 0 },
+    borrowers: { inserted: 0, updated: 0 },
     warnings: [],
     durationMs: 0,
   };
@@ -307,10 +273,14 @@ async function executeImport(
 
   const body = async (): Promise<void> => {
     if (mode === 'replace') {
+      // 03 §6 / 02 §9.1：整体替换业务表前先清理当前 undo 快照 ——
+      // 否则 30 秒窗口内的旧撤销会把已替换掉的数据写回来，语义混乱
+      await db.snapshots.where('kind').equals('undo').delete();
       await db.loans.clear();
       await db.copies.clear();
       await db.books.clear();
       await db.locations.clear();
+      await db.borrowers.clear();
     }
 
     // 「未分类」是所有位置的兜底，导入前必须存在（02 §7.2）
@@ -322,16 +292,38 @@ async function executeImport(
     const idRemap = await mergeBooks(db, backup.data.books, summary);
     await mergeCopies(db, backup.data.copies, idRemap, summary, warnings.add);
     await mergeLoans(db, backup.data.loans, summary, warnings.add);
+    await mergeBorrowers(db, backup.data.borrowers, summary);
 
     // 修复通道：重建路径 + 全部不变式
     const repair = await repairInvariants(db);
     for (const message of repair.warnings) warnings.add(message);
 
+    if (!dryRun) {
+      // 02 §12.3：applyImport 按实际变更条数（写进业务表的行数）计入写计数器；
+      // preview 不计（事务整体回滚）
+      const changed =
+        summary.locations.inserted +
+        summary.locations.updated +
+        summary.books.inserted +
+        summary.books.updated +
+        summary.copies.inserted +
+        summary.copies.updated +
+        summary.loans.inserted +
+        summary.loans.updated +
+        summary.borrowers.inserted +
+        summary.borrowers.updated;
+      await bumpWriteCounterBy(db, changed);
+    }
+
     if (dryRun) throw DRY_RUN_SIGNAL;
   };
 
   try {
-    await db.transaction('rw', db.locations, db.books, db.copies, db.loans, db.settings, body);
+    await db.transaction(
+      'rw',
+      [db.locations, db.books, db.copies, db.loans, db.borrowers, db.snapshots, db.settings],
+      body,
+    );
   } catch (error) {
     if (error !== DRY_RUN_SIGNAL) throw error;
   }
