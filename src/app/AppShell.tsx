@@ -4,10 +4,11 @@
  * 窄屏底部标签栏、宽屏左侧边栏，读的是同一份 NAV_ITEMS。
  */
 
-import type { ReactNode } from 'react';
+import { Suspense, type ReactNode } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 
 import { NAV_ITEMS } from './nav.tsx';
+import { SkeletonList } from './Skeleton.tsx';
 import { buttonClass, cn } from './ui.tsx';
 import { UndoBanner } from './UndoBanner.tsx';
 
@@ -107,7 +108,11 @@ export function AppShell(): ReactNode {
 
           {/* pb-20：给窄屏底部标签栏留出空间，否则最后一行内容被挡住 */}
           <main className="min-w-0 flex-1 px-4 py-6 pb-24 sm:px-6 sm:py-8">
-            <Outlet />
+            {/* 路由级拆包后的兜底（04 §11.16）：Suspense 只包内容区，导航栏不跟着闪。
+                骨架屏而不是转圈 —— 04 §11.9 第 3 条：整页首次加载用骨架屏。 */}
+            <Suspense fallback={<SkeletonList rows={3} label="正在打开…" />}>
+              <Outlet />
+            </Suspense>
           </main>
         </div>
       </div>

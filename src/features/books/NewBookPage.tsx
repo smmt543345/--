@@ -5,52 +5,37 @@
  * - ISBN 命中已有书目 → 给「合并到已有书目（把副本挂过去）/ 仍然新建」两个选项；
  * - 书名疑似重复（同名不同 ISBN）→ 只提示不阻断（02 §10.3）。
  *
- * 阶段 B2 的另外两个入口（规范 05）：
- * - 「AI 补全」：书名/ISBN → OpenAI 兼容服务 → 只填空字段（05 §3.3）；
- * - 「批量导入」：粘贴 / CSV / Excel，整块在 BulkImportSection（04 §11.1、05 §2）。
+ * 页面顺序是 04 §11.13 定的：动作行 → 书名 → 作者 → 出版社 → 位置 →「更多信息」折叠区 →
+ * 保存 → 批量导入区（原样留在最下方）。三个识别入口整块在 LookupActions，折叠区九项在 MoreFields
+ * —— 页面只管编排与保存，不再自己排字段。
+ *
+ * 保存成功后**不跳转**（04 §11.14.A）：停留本页 + 顶部横幅「已保存《书名》· N 副本」+
+ * 「去看这本书」；表单按「保留位置/品相/标签、清空其余、副本数回 1」重置。录第 2 本不该先点回新增页。
  *
  * 表单记忆（04 §11.2）：挂载时用 applyDraftPrefs 回填位置/品相/标签，保存成功后
  * 用 rememberDraftPrefs 记住这一次 —— 连录几十本时不必每次重选。
- *
- * 保存成功后跳到书目详情页 —— 那里可以继续加副本、借出。
  */
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+import { Collapsible } from '../../app/Collapsible.tsx';
 import { useDb } from '../../app/db-context.ts';
-import { COVER_LABELS, COPY_CONDITION_LABELS, bookDisplayTitle, locationPathText } from '../../app/labels.ts';
-import {
-  Banner,
-  Button,
-  Card,
-  ChoiceGroup,
-  InlineError,
-  PageHeader,
-  SelectField,
-  TextAreaField,
-  TextField,
-  type ChoiceOption,
-  type SelectOption,
-} from '../../app/ui.tsx';
+import { COVER_LABELS, bookDisplayTitle, locationPathText } from '../../app/labels.ts';
+import { Banner, Button, Card, InlineError, PageHeader, SelectField, TextField, type SelectOption } from '../../app/ui.tsx';
 import { useAsyncAction, useLiveQuery } from '../../app/useLiveQuery.ts';
 import { listBooks } from '../../db/books.ts';
 import { putCover } from '../../db/covers.ts';
 import { listLocations } from '../../db/locations.ts';
-import { SETTING_KEYS, getSetting } from '../../db/settings.ts';
 import { parsePositiveInt } from '../../domain/text.ts';
-import { COPY_CONDITIONS } from '../../domain/types.ts';
-import type { Book, CopyCondition, Location } from '../../domain/types.ts';
-import { completeChat, isAiConfigured, type AiConfig } from '../../platform/ai.ts';
+import type { Book, Location } from '../../domain/types.ts';
 import type { CompressedImage } from '../../platform/image.ts';
-import { AI_SYSTEM_PROMPT, buildAiUserPrompt, mergeAiFields, parseAiResponse } from './ai.ts';
 import { BulkImportSection } from './BulkImportSection.tsx';
-import { CoverPicker } from './CoverPicker.tsx';
+import { LookupActions, type LookupNotice } from './LookupActions.tsx';
+import { MoreFields, countMoreFields } from './MoreFields.tsx';
 import {
   EMPTY_DRAFT,
-  MAX_INITIAL_COUNT,
   applyDraftPrefs,
-  isbnNotice,
   rememberDraftPrefs,
   submitBook,
   suspectedDuplicates,
@@ -59,10 +44,22 @@ import {
   type SubmitOptions,
 } from './write.ts';
 
-const CONDITION_OPTIONS: readonly ChoiceOption<CopyCondition>[] = COPY_CONDITIONS.map((value) => ({
-  value,
-  label: COPY_CONDITION_LABELS[value],
-}));
+/** 刚保存的那一本：顶部横幅与「去看这本书」用它（04 §11.14.A）。 */
+interface SavedBook {
+  bookId: string;
+  title: string;
+  copies: number;
+}
+
+/** 04 §11.14.A 的重置口径：**保留**位置/品相/标签（表单记忆的三个字段，04 §11.2），清空其余。 */
+function resetDraft(previous: BookDraft): BookDraft {
+  return {
+    ...EMPTY_DRAFT,
+    locationId: previous.locationId,
+    condition: previous.condition,
+    tagsRaw: previous.tagsRaw,
+  };
+}
 
 export function NewBookPage(): ReactNode {
   const db = useDb();
@@ -77,6 +74,12 @@ export function NewBookPage(): ReactNode {
   const [mergeIntoId, setMergeIntoId] = useState('');
   // 拍好的封面先留在这里，保存书目时随书入库（04 §11.8：先存书目再存封面）
   const [pendingCover, setPendingCover] = useState<CompressedImage | null>(null);
+  // 动作行的提示横幅（扫码 / 照片 / AI 的结果）—— ISBN 框在折叠区里，改 ISBN 时要清掉它
+  const [lookupNotice, setLookupNotice] = useState<LookupNotice | null>(null);
+  // 上一次保存的结果：本页横幅（04 §11.14.A）
+  const [saved, setSaved] = useState<SavedBook | null>(null);
+  // 每保存成功一次 +1：给折叠区换 key 用（见下面 Collapsible 的注释）
+  const [formRound, setFormRound] = useState(0);
 
   const locations = useLiveQuery<Location[]>(async () => listLocations(db), [db], []);
   const books = useLiveQuery<Book[]>(async () => listBooks(db), [db], []);
@@ -99,43 +102,6 @@ export function NewBookPage(): ReactNode {
     ...locations.map((location) => ({ value: location.id, label: locationPathText(location.path) })),
   ];
   const suspected = suspectedDuplicates(books, draft);
-
-  /* ---------------- AI 补全（05 §3） ---------------- */
-
-  const aiConfig = useLiveQuery<AiConfig>(
-    async () => ({
-      baseUrl: await getSetting<string>(db, SETTING_KEYS.aiBaseUrl, 'https://api.openai.com/v1'),
-      apiKey: await getSetting<string>(db, SETTING_KEYS.aiApiKey, ''),
-      model: await getSetting<string>(db, SETTING_KEYS.aiModel, 'gpt-4o-mini'),
-    }),
-    [db],
-    { baseUrl: 'https://api.openai.com/v1', apiKey: '', model: 'gpt-4o-mini' },
-  );
-  const aiConfigured = isAiConfigured(aiConfig);
-  const [aiBusy, setAiBusy] = useState(false);
-  const [aiNotice, setAiNotice] = useState<{ tone: 'green' | 'red'; text: string } | null>(null);
-
-  function runAiComplete(): void {
-    if (draft.title.trim() === '' && draft.isbn.trim() === '') return;
-    setAiBusy(true);
-    setAiNotice(null);
-    void (async () => {
-      try {
-        const text = await completeChat(aiConfig, AI_SYSTEM_PROMPT, buildAiUserPrompt({ title: draft.title, isbn: draft.isbn }));
-        const parsed = parseAiResponse(text);
-        if (!parsed.ok) {
-          setAiNotice({ tone: 'red', text: parsed.error });
-          return;
-        }
-        setDraft((previous) => mergeAiFields(previous, parsed.fields));
-        setAiNotice({ tone: 'green', text: '已补全，请核对后保存——你已经填过的字段不会被覆盖。' });
-      } catch (error) {
-        setAiNotice({ tone: 'red', text: error instanceof Error ? error.message : String(error) });
-      } finally {
-        setAiBusy(false);
-      }
-    })();
-  }
 
   /* ---------------- 保存 ---------------- */
 
@@ -175,8 +141,14 @@ export function NewBookPage(): ReactNode {
           );
         }
       }
-      // created / merged 都去详情页：接着加副本、借出都在那里
-      navigate(`/books/${result.book.id}`);
+      // 不跳转（04 §11.14.A）：本页横幅报一句就行，接着录下一本
+      setSaved({ bookId: result.book.id, title: bookDisplayTitle(result.book), copies: result.copies });
+      setDraft(resetDraft);
+      setCountRaw(String(EMPTY_DRAFT.initialCount));
+      setPendingCover(null);
+      // 上一本的扫后提示描述的是上一个 ISBN，跟着表单一起清掉
+      setLookupNotice(null);
+      setFormRound((previous) => previous + 1);
     });
   }
 
@@ -186,6 +158,20 @@ export function NewBookPage(): ReactNode {
         title="新增书目"
         description="先记下书名或 ISBN，其余信息之后可以再补。保存后可以在详情页继续添加副本。"
       />
+
+      {/* 保存成功后的落点（04 §11.14.A）：想去看刚存的那本，这里一步就到 */}
+      {saved !== null && (
+        <Banner
+          tone="green"
+          action={
+            <Button size="sm" variant="primary" onClick={() => navigate(`/books/${saved.bookId}`)}>
+              去看这本书
+            </Button>
+          }
+        >
+          已保存《{saved.title}》· {saved.copies} 副本
+        </Banner>
+      )}
 
       {isbnConflicts !== null && (
         <Card className="space-y-3 border-amber-300 p-4 dark:border-amber-800">
@@ -236,29 +222,20 @@ export function NewBookPage(): ReactNode {
       )}
 
       <Card className="space-y-4 p-4">
+        {/* 第 1 项：动作行（04 §11.13）—— 三个入口都是动作，不跟着 ISBN 收进折叠区 */}
+        <LookupActions
+          draft={draft}
+          updateDraft={setDraft}
+          disabled={action.pending}
+          notice={lookupNotice}
+          onNotice={setLookupNotice}
+        />
         <TextField
           label="书名"
           value={draft.title}
           onValueChange={(value) => setDraft({ ...draft, title: value })}
           hint="可以先留空，之后再补"
         />
-        <TextField
-          label="ISBN"
-          value={draft.isbn}
-          onValueChange={(value) => setDraft({ ...draft, isbn: value })}
-          hint={isbnNotice(draft.isbn) ?? '可以留空；填了才能按 ISBN 查重'}
-        />
-        <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={runAiComplete} disabled={!aiConfigured || aiBusy || (draft.title.trim() === '' && draft.isbn.trim() === '')}>
-            {aiBusy ? 'AI 补全中…' : '✦ AI 补全'}
-          </Button>
-          <span className="text-xs text-neutral-500 dark:text-neutral-400">
-            {aiConfigured
-              ? '按书名或 ISBN 自动补作者、出版社等信息；只填空着的字段'
-              : '在「备份与设置 → AI 元数据补全」配置后可用（OpenAI 兼容接口）'}
-          </span>
-        </div>
-        {aiNotice !== null && <Banner tone={aiNotice.tone}>{aiNotice.text}</Banner>}
         <TextField
           label="作者"
           value={draft.authorsRaw}
@@ -270,57 +247,23 @@ export function NewBookPage(): ReactNode {
           value={draft.publisher}
           onValueChange={(value) => setDraft({ ...draft, publisher: value })}
         />
-        <TextField
-          label="出版日期"
-          value={draft.publishDate}
-          onValueChange={(value) => setDraft({ ...draft, publishDate: value })}
-          hint="YYYY-MM-DD；不确定就留空"
-        />
-        <TextField
-          label="封面图 URL"
-          value={draft.coverUrl}
-          onValueChange={(value) => setDraft({ ...draft, coverUrl: value })}
-          hint="网络图片地址，可以留空"
-        />
-        {/* 拍照存封面（04 §11.8）：先在这里预览确认，保存书目时随书入库 */}
-        <CoverPicker
-          title={bookDisplayTitle({ title: draft.title, isbn: draft.isbn })}
-          current={pendingCover}
-          onConfirm={setPendingCover}
-          onDelete={() => setPendingCover(null)}
-          removeLabel={COVER_LABELS.removePending}
-          disabled={action.pending}
-        />
-        <TextField
-          label="标签"
-          value={draft.tagsRaw}
-          onValueChange={(value) => setDraft({ ...draft, tagsRaw: value })}
-          hint="多个标签用逗号或顿号分开"
-        />
-
         <SelectField label="位置" value={draft.locationId} options={locationOptions} onValueChange={(value) => setDraft({ ...draft, locationId: value })} />
-        <ChoiceGroup
-          label="品相"
-          value={draft.condition}
-          options={CONDITION_OPTIONS}
-          onChange={(value) => setDraft({ ...draft, condition: value })}
-        />
-        <TextField
-          label="所有者"
-          value={draft.owner}
-          onValueChange={(value) => setDraft({ ...draft, owner: value })}
-          hint="朋友合库时用来区分「我的」「老张的」，可以留空"
-        />
-        <TextAreaField label="备注" value={draft.note} onValueChange={(value) => setDraft({ ...draft, note: value })} hint="可以留空" />
-        <TextField
-          label="副本数量"
-          type="number"
-          min={1}
-          max={MAX_INITIAL_COUNT}
-          value={countRaw}
-          onValueChange={setCountRaw}
-          hint={`同一本书有几本就填几，最多 ${MAX_INITIAL_COUNT} 本`}
-        />
+
+        {/* 第 6 项：折叠区（04 §11.13）—— 收起时只占一行，计数提示里面已经填了几项。
+            每保存一次就换一次 key：里面有一张**拍了但没确认**的照片（CoverPicker 的暂存态，
+            页面看不到也清不掉），那是上一本的照片，不该跟着下一本 —— 顺手也把折叠区收回默认态 */}
+        <Collapsible key={formRound} title="更多信息（可选）" count={countMoreFields(draft, pendingCover, countRaw)}>
+          <MoreFields
+            draft={draft}
+            updateDraft={setDraft}
+            countRaw={countRaw}
+            onCountChange={setCountRaw}
+            pendingCover={pendingCover}
+            onPendingCover={setPendingCover}
+            disabled={action.pending}
+            onIsbnEdit={() => setLookupNotice(null)}
+          />
+        </Collapsible>
 
         {(formError ?? action.error) !== null && <InlineError>{formError ?? action.error}</InlineError>}
         <div className="flex flex-wrap gap-2">
@@ -330,7 +273,7 @@ export function NewBookPage(): ReactNode {
         </div>
       </Card>
 
-      {/* 批量导入（04 §11.1、05 §2）：整块是独立的导入流水线，拆在 BulkImportSection 里 */}
+      {/* 批量导入（04 §11.1、05 §2）：整块是独立的导入流水线，留在页面最下方（04 §11.13 第 8 项） */}
       <BulkImportSection />
     </div>
   );
