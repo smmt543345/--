@@ -14,14 +14,21 @@ import { useId, useState, type ReactNode } from 'react';
 import { buttonClass } from './ui.tsx';
 
 export interface CollapsibleProps {
-  /** 未展开时也要说得清里面是什么（如「更多信息（可选）」） */
+  /** 未展开时也要说得清里面是什么（如「更多信息（可选）」「筛选」） */
   title: string;
-  /** 已填项数：>0 时挂在标题后面，收起状态下靠它提示「里面有东西」，展开才看得见 */
+  /** 已填/生效项数：>0 时挂在标题后面，收起状态下靠它提示「里面有东西」，展开才看得见 */
   count?: number;
+  /** 计数文案（默认「已填 N 项」）；搜索页的筛选说「N 项生效」更贴切 */
+  countLabel?: (count: number) => string;
   children: ReactNode;
 }
 
-export function Collapsible({ title, count = 0, children }: CollapsibleProps): ReactNode {
+/** 默认计数文案：新增页的「更多信息」用它。 */
+function defaultCountLabel(count: number): string {
+  return `已填 ${count} 项`;
+}
+
+export function Collapsible({ title, count = 0, countLabel = defaultCountLabel, children }: CollapsibleProps): ReactNode {
   const panelId = `collapsible-${useId()}`;
   const [open, setOpen] = useState(false);
 
@@ -37,7 +44,7 @@ export function Collapsible({ title, count = 0, children }: CollapsibleProps): R
       >
         <span>
           {title}
-          {count > 0 && <span className="ml-1 text-xs font-normal text-neutral-500 dark:text-neutral-400">· 已填 {count} 项</span>}
+          {count > 0 && <span className="ml-1 text-xs font-normal text-neutral-500 dark:text-neutral-400">· {countLabel(count)}</span>}
         </span>
         {/* 箭头是纯装饰：读屏听 aria-expanded 就够了 */}
         <span aria-hidden="true" className="text-xs text-neutral-400">

@@ -12,6 +12,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
+import { Collapsible } from '../../app/Collapsible.tsx';
 import { useDb } from '../../app/db-context.ts';
 import { useDebounced } from '../../app/hooks.ts';
 import { EmptyShelfArt, NoResultsArt } from '../../app/illustrations.tsx';
@@ -190,6 +191,8 @@ export function SearchPage(): ReactNode {
 
   const query = settledKeyword.trim();
   const hasFilter = query !== '' || locationId !== '' || status !== 'all' || tag !== '';
+  // 收起时徽章上的数字（04 §11.19）：只数被折叠起来的那三个，关键词不算（它一直看得见）
+  const activeFilterCount = [locationId !== '', tag !== '', status !== 'all'].filter(Boolean).length;
   // 位置/状态是副本维度的条件：命中后每条只带符合条件的副本，
   // 不加这句说明，用户会以为「我明明有 3 本，怎么只显示 1 本」。
   const copyFilterActive = locationId !== '' || status !== 'all';
@@ -216,24 +219,28 @@ export function SearchPage(): ReactNode {
           placeholder="书名 / 作者 / ISBN / 标签 / 出版社"
           autoComplete="off"
         />
-        <SelectField
-          label="位置"
-          value={locationId}
-          onValueChange={setLocationId}
-          options={locationOptions}
-          hint="选中一个位置时，连它的下级位置一起搜（与「位置」页的计数口径一致）"
-        />
-        {/* 库里一个标签都没有时不占位置（04 §11.5） */}
-        {tags.length > 0 && (
+        {/* 位置/标签/状态收进「筛选」（04 §11.19）：手机上这三个控件加两行说明要吃掉大半屏，
+            而搜索最常用的动作是打几个字。收起时靠徽章说清「还有几项开着」。 */}
+        <Collapsible title="筛选" count={activeFilterCount} countLabel={(n) => `${n} 项生效`}>
           <SelectField
-            label="标签"
-            value={tag}
-            onValueChange={setTag}
-            options={tagOptions}
-            hint="单独按标签搜时，只有标签、还没有实体副本的书也会列出来"
+            label="位置"
+            value={locationId}
+            onValueChange={setLocationId}
+            options={locationOptions}
+            hint="选中一个位置时，连它的下级位置一起搜（与「位置」页的计数口径一致）"
           />
-        )}
-        <ChoiceGroup label="副本状态" value={status} options={STATUS_FILTER_OPTIONS} onChange={setStatus} />
+          {/* 库里一个标签都没有时不占位置（04 §11.5） */}
+          {tags.length > 0 && (
+            <SelectField
+              label="标签"
+              value={tag}
+              onValueChange={setTag}
+              options={tagOptions}
+              hint="单独按标签搜时，只有标签、还没有实体副本的书也会列出来"
+            />
+          )}
+          <ChoiceGroup label="副本状态" value={status} options={STATUS_FILTER_OPTIONS} onChange={setStatus} />
+        </Collapsible>
       </div>
 
       {results === null ? (
