@@ -184,7 +184,7 @@ function CopyCard({
             归还
           </Button>
         )}
-        <Button variant="danger" onClick={() => onDelete(copy)} disabled={busy}>
+        <Button variant="danger-outline" onClick={() => onDelete(copy)} disabled={busy}>
           删除副本
         </Button>
       </div>
@@ -581,8 +581,11 @@ export function BookDetailPage(): ReactNode {
         actions={
           editing ? undefined : (
             <>
-              <Button onClick={startEdit}>编辑</Button>
-              <Button variant="danger" onClick={openDeleteBook}>
+              {/* 破坏性操作不该是页面上最亮的：编辑为主色，删除降为红描边（04 §11.18） */}
+              <Button variant="primary" onClick={startEdit}>
+                编辑
+              </Button>
+              <Button variant="danger-outline" onClick={openDeleteBook}>
                 删除这本书
               </Button>
             </>

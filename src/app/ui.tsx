@@ -195,7 +195,7 @@ export function StatTile({ label, value, tone = 'gray', hint }: { label: string;
  * 按钮
  * ------------------------------------------------------------------ */
 
-export type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'ghost';
+export type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'danger-outline' | 'ghost';
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary:
@@ -204,6 +204,9 @@ const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
     'border border-neutral-300 bg-white text-neutral-800 shadow-sm hover:border-neutral-400 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:border-neutral-600 dark:hover:bg-neutral-800',
   danger:
     'bg-red-600 text-white shadow-sm shadow-red-600/25 hover:bg-red-700 hover:shadow-md hover:shadow-red-600/25 disabled:bg-red-400 disabled:shadow-none dark:disabled:bg-red-900',
+  // 红描边：保留危险信号但降视觉权重 —— 破坏性操作不该是页面上最亮的（04 §11.18）
+  'danger-outline':
+    'border border-red-300 bg-white text-red-700 shadow-sm hover:border-red-400 hover:bg-red-50 dark:border-red-800 dark:bg-neutral-900 dark:text-red-300 dark:hover:border-red-700 dark:hover:bg-red-950/40',
   ghost: 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800',
 };
 

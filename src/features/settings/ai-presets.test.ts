@@ -22,7 +22,7 @@ describe('AI 服务商预设（04 §11.17）', () => {
     }
   });
 
-  it('地址不以 / 结尾（否则会被拼成 //chat/completions）', () => {
+  it('地址不以 / 结尾（存进表里就保持规范形式）', () => {
     for (const preset of AI_PRESETS) {
       assert.ok(!preset.baseUrl.endsWith('/'), `${preset.id} 的地址不该以 / 结尾`);
     }
@@ -57,9 +57,11 @@ describe('AI 服务商预设（04 §11.17）', () => {
     );
   });
 
-  it('OpenAI 保留在表里，且说明里点明国内直连不通', () => {
+  it('OpenAI 保留在表里，且警示挂在按钮上（不是只写在说明里）', () => {
     const openai = presetById('openai');
     assert.notEqual(openai, undefined);
     assert.match(openai?.note ?? '', /直连不通/);
+    // 04 §11.17 要求「按钮上标明」：警示必须挂在预设自身上
+    assert.match(openai?.caveat ?? '', /直连不通/);
   });
 });

@@ -291,7 +291,7 @@ Dexie 在**模块初始化时**捕获 `indexedDB` 全局，而 `locations → sn
 
 **跨 300 行的文件与裁定**：`features/books/NewBookPage.tsx` 338（页面级聚合，拆出 `BulkImportSection`/`CoverPicker` 后仍在 300 上方——留待下一轮按「页面拆分」项目处理）；`features/books/write.ts` 316（同上）；
 `import.test.ts` 317（**接受**：仅超测试文件 300 行目标 17 行，用例同一主题域，拆了反而降低可读性）；
-`LocationsPage.tsx` 728、`BookDetailPage.tsx` 921、`format.ts` 654 —— 存量 >500，已在 §10 大文件拆分项目内。
+`LocationsPage.tsx` 771、`BookDetailPage.tsx` 944、`format.ts` 653 —— 存量 >500，已在 §10 大文件拆分项目内（2026-09-20 实测；LocationsPage 含 B10 行内菜单的 +40 行）。
 
 **需父层知晓的行为裁定（已实现）**：
 - 新增页拍照 + 命中同 ISBN 选择「合并到已有书目」时，新照片**覆盖**目标书目原有封面（`putCover` 是 upsert）。
@@ -428,6 +428,8 @@ NewBookPage 减到 282 行：页面级聚合的结构未变，§5.4 那笔拆分
 
 **测试账实测**：469 → **477**（+8）。
 
+**已知欠账（本次未处理，审查意见 #3）**：AI 三项默认值在 `features/settings/AiSection.tsx`、`db/settings.ts`、`features/books/LookupActions.tsx` 三处各写一份，目前值相同所以无行为差异；但 B9 的起因正是「默认地址不通」，将来改默认值时要记得改三处。整理时抽一个共享常量供三处引用即可。
+
 ---
 
 ## 6. 工程硬约束
@@ -507,6 +509,7 @@ npm run typecheck # tsc --noEmit
 | D3 | 连续录入：保存后不跳转 + 扫码弹层「连续录入」开关（扫一本存一本、已有则跳过） | 连扫 N 本建 N 条书目且弹层不关；重复 ISBN 被跳过并提示；表单记忆继续生效；**单本保存后停留新增页**并显示「已保存《书名》· N 副本」横幅，表单按 04 §11.14.A 重置（保留位置/品相/标签、副本数回 1） | ✅ 2026-09-20 实现交付（规范：04 §11.14）；真机验收待用户（连扫一批）；三批同批交付，npm test 469/469、typecheck、build 全绿 |
 | B8 | 旧账三件：B2 状态订正、xlsx 换 SheetJS CDN 版、首屏按路由拆包 + 空闲预取 | 文档与交付实情一致；`npm audit` 归零；入口 chunk 明显变小且断网仍能进各页 | ✅ 2026-09-20 实现交付（规范：04 §11.16、01 §5.7）；入口 553.11 → **415.14** kB（gzip 173.28 → **133.13** kB）、audit 归零、npm test 469/469；真机断网验收待用户 |
 | B9 | AI 配置加服务商预设（DeepSeek / 智谱 / 通义 / OpenAI），顺手把设置页超线的两块拆出独立文件 | 点预设只填地址与模型、密钥不动；不自动保存；当前配置属于哪个预设由反查得出；SettingsPage 回到 500 行以内 | ✅ 2026-09-20 实现交付（规范：04 §11.17、01 §5.8）；设置页 599 → 450 行（拆出 AI 区与清空数据区）；npm test 477/477、typecheck、build 全绿；真机验收待用户 |
+| B10 | 视觉与操作微调：总览体检横幅折叠、位置页编辑/删除收进「⋯」菜单、破坏性按钮降为红描边（新增 danger-outline）、ISBN 数字键盘 | 总览首屏不再被六条「已修正」挤走；位置页每行只剩一个主按钮；删除不再是页面最亮的；手机 ISBN 出数字键盘 | ✅ 2026-09-20 实现交付（规范：04 §11.18）；npm test 477/477、typecheck、build 全绿；截图验收通过；真机观感待用户 |
 | H | Capacitor 安卓打包 | 产出 APK；相机权限可用；`androidScheme: 'https'` 已配置 |
 | I | 实测：录 50–100 本真实书 | 走完录入→找书→借出→归还→导出→导入全流程 |
 
@@ -530,4 +533,4 @@ npm run typecheck # tsc --noEmit
 - 局域网主机模式（一台设备当服务端）
 - 封面离线化：v1 只存 `coverUrl`，断网时封面会挂（书名等信息仍可用）；后续把封面存成 blob 到独立表
 - 书脊 AI 识别
-- 大文件拆分：`BookDetailPage.tsx`（934 行）、`SettingsPage.tsx`（585 行）、`backup/format.ts`（521 行）、`backup/import.test.ts`（531 行）已超 500 行硬上限——B3 只做减量/追加，整体拆分立项后续（01 §5.1）
+- 大文件拆分：`BookDetailPage.tsx`（944 行）、`backup/format.ts`（653 行）、`backup/import.test.ts`（677 行）、`LocationsPage.tsx`（771 行）已超 500 行硬上限——只做减量/追加，整体拆分立项后续（01 §5.1）。`SettingsPage.tsx` 已于 B9 拆到 450 行，移出本清单。

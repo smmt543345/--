@@ -14,7 +14,7 @@
  * `db/copies.ts`，位置计数走 `db/stats.ts`（02 §10.1 的口径来源），书目标题走 `db/books.ts`。
  */
 
-import { useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 import { useDb } from '../../app/db-context.ts';
@@ -248,6 +248,18 @@ export function LocationsPage(): ReactNode {
   const [deleteTarget, setDeleteTarget] = useState<Location | null>(null);
   const [strategy, setStrategy] = useState<DeleteLocationStrategy>('reparent');
 
+  // 行内菜单同一时刻只开一个，点菜单外自动关（04 §11.18）。
+  // 开关状态放页面级：renderNode 是普通函数，钩子放它里面会随节点数变化 → React #310。
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  useEffect(() => {
+    if (menuOpenId === null) return undefined;
+    const onPointerDown = (event: PointerEvent): void => {
+      if ((event.target as Element | null)?.closest('[data-row-menu]') === null) setMenuOpenId(null);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [menuOpenId]);
+
   const createAction = useAsyncAction();
   const editAction = useAsyncAction();
   const deleteAction = useAsyncAction();
@@ -457,6 +469,9 @@ export function LocationsPage(): ReactNode {
   }
 
   function renderNode(node: LocationTreeNode, depth: number): ReactNode {
+    // 行内菜单：只留「查看藏书」主按钮，编辑/删除收进「⋯」（04 §11.18）。
+    // 开关状态在页面级（menuOpenId）：renderNode 是普通函数，钩子放这里会随节点数变化。
+    const menuOpen = menuOpenId === node.id;
     const isSystem = node.id === UNSORTED_LOCATION_ID;
     const stat = statByLocation.get(node.id);
     const subtreeCopies = stat?.subtree ?? 0;
@@ -523,20 +538,47 @@ export function LocationsPage(): ReactNode {
             <Button onClick={() => toggleCopies(node.id)} aria-pressed={isOpen}>
               {isOpen ? '收起藏书' : '查看藏书'}
             </Button>
-            <Button
-              onClick={() => openEdit(node)}
-              disabled={isSystem}
-              title={isSystem ? '「未分类」是系统位置，不能重命名或移动' : undefined}
-            >
-              编辑
-            </Button>
-            <Button
-              onClick={() => openDelete(node)}
-              disabled={isSystem}
-              title={isSystem ? '「未分类」是系统位置，不能删除' : undefined}
-            >
-              删除
-            </Button>
+            {/* 编辑/删除收进行内菜单：每行三个按钮 × N 行视觉噪音太大（04 §11.18） */}
+            <div className="relative" data-row-menu="">
+              <Button
+                onClick={() => setMenuOpenId(menuOpen ? null : node.id)}
+                disabled={isSystem}
+                aria-expanded={menuOpen}
+                aria-haspopup="menu"
+                title={isSystem ? '「未分类」是系统位置，不能重命名、移动或删除' : undefined}
+              >
+                ⋯
+              </Button>
+              {menuOpen && (
+                <div
+                  role="menu"
+                  className="absolute right-0 top-full z-20 mt-1 w-28 rounded-lg border border-neutral-200 bg-white p-1 shadow-lg dark:border-neutral-700 dark:bg-neutral-900"
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpenId(null);
+                      openEdit(node);
+                    }}
+                    className="block w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                  >
+                    编辑
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpenId(null);
+                      openDelete(node);
+                    }}
+                    className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-red-700 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950/40"
+                  >
+                    删除
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

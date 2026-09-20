@@ -57,6 +57,25 @@ export function AiSection(): ReactNode {
     setTestResult(null);
   }
 
+  /**
+   * 字段一改，上一次的测试结论就失效了 —— 它测的是改之前那套配置。
+   * （审查意见 #4）不清的话，改完地址旁边还挂着绿灯「连接成功」。
+   */
+  function editBase(value: string): void {
+    setBaseDraft(value);
+    setTestResult(null);
+  }
+
+  function editKey(value: string): void {
+    setKeyDraft(value);
+    setTestResult(null);
+  }
+
+  function editModel(value: string): void {
+    setModelDraft(value);
+    setTestResult(null);
+  }
+
   function save(): void {
     void action.run(async () => {
       await setSetting(db, SETTING_KEYS.aiBaseUrl, baseUrl.trim());
@@ -105,6 +124,8 @@ export function AiSection(): ReactNode {
               disabled={action.pending}
             >
               {preset.label}
+              {/* 直连不通的把警示挂在按钮上（04 §11.17）：不能等「当前正好是这一家」才看见 */}
+              {preset.caveat !== undefined && <span className="ml-1 text-xs font-normal opacity-80">（{preset.caveat}）</span>}
             </Button>
           ))}
         </div>
@@ -119,7 +140,7 @@ export function AiSection(): ReactNode {
         <TextField
           label="接口地址"
           value={baseUrl}
-          onValueChange={setBaseDraft}
+          onValueChange={editBase}
           hint="OpenAI 兼容的 base URL；除 DeepSeek 外一般以 /v1 结尾"
           className="w-80"
         />
@@ -132,14 +153,14 @@ export function AiSection(): ReactNode {
           label="密钥"
           type="password"
           value={keyDraft ?? prefs.apiKey}
-          onValueChange={setKeyDraft}
+          onValueChange={editKey}
           hint="只存在这台设备上，请求只发给你填的地址；本地 Ollama 可留空"
           className="w-80"
         />
         <TextField
           label="模型名"
           value={model}
-          onValueChange={setModelDraft}
+          onValueChange={editModel}
           hint="点上面的预设会自动填；也可以手填（例如本地 Ollama 的 llama3.1）"
           className="w-64"
         />

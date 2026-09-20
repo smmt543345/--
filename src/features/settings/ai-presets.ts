@@ -20,6 +20,12 @@ export interface AiPreset {
   model: string;
   /** 按钮下方的一行说明，含「国内能不能直连」这种关键信息 */
   note: string;
+  /**
+   * 直接挂在按钮上的警示（04 §11.17：直连不通的要「按钮上标明」）。
+   * 与 `note` 分开是因为按钮要短、说明要全，而且按钮上的警示不能等到
+   * 「当前配置正好是这一家」才现身。
+   */
+  caveat?: string;
 }
 
 /** 不匹配任何预设时的状态（不是可选项，是反查结果）。 */
@@ -54,6 +60,7 @@ export const AI_PRESETS: readonly AiPreset[] = [
     baseUrl: 'https://api.openai.com/v1',
     model: 'gpt-4o-mini',
     note: '国内多数网络直连不通（需自备网络）。保留它只因为它是这套协议的基准。',
+    caveat: '国内直连不通',
   },
 ];
 

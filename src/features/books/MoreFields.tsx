@@ -77,6 +77,7 @@ export function MoreFields({
     <>
       <TextField
         label="ISBN"
+        inputMode="numeric"
         value={draft.isbn}
         onValueChange={(value) => {
           // 改了 ISBN，上一条提示（「库里已有同 ISBN」/「已补全」）就失效了，免得它继续描述旧值

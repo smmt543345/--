@@ -73,6 +73,10 @@ export function OverviewPage(): ReactNode {
 
   // 启动体检的告警只在本会话提醒一次，关掉后不再打扰（04 §4）
   const [warningsDismissed, setWarningsDismissed] = useState(false);
+  // 明细默认收起：六条「已修正」平铺会把首屏统计挤到第二屏（04 §11.18）
+  const [repairExpanded, setRepairExpanded] = useState(false);
+  // 持久化提示可关：它不是错误，每次进总览都在反而成了噪音（04 §11.18）
+  const [persistenceDismissed, setPersistenceDismissed] = useState(false);
 
   const snapshot = useLiveQuery<OverviewSnapshot | null>(
     async () => {
@@ -98,17 +102,24 @@ export function OverviewPage(): ReactNode {
 
       {repairWarnings.length > 0 && !warningsDismissed && (
         <Banner tone="amber" onClose={() => setWarningsDismissed(true)}>
-          <p className="font-medium">启动体检修复了 {repairWarnings.length} 处数据问题</p>
-          <ul className="mt-1 list-disc space-y-0.5 pl-4">
-            {repairWarnings.map((warning, index) => (
-              <li key={`${index}-${warning}`}>{warning}</li>
-            ))}
-          </ul>
+          <div className="flex items-center justify-between gap-2">
+            <p className="font-medium">启动体检自动修复了 {repairWarnings.length} 处数据问题</p>
+            <Button size="sm" variant="ghost" onClick={() => setRepairExpanded((open) => !open)} aria-expanded={repairExpanded}>
+              {repairExpanded ? '收起' : '查看'}
+            </Button>
+          </div>
+          {repairExpanded && (
+            <ul className="mt-1 list-disc space-y-0.5 pl-4">
+              {repairWarnings.map((warning, index) => (
+                <li key={`${index}-${warning}`}>{warning}</li>
+              ))}
+            </ul>
+          )}
         </Banner>
       )}
 
-      {!persisted && (
-        <Banner tone="gray">
+      {!persisted && !persistenceDismissed && (
+        <Banner tone="gray" onClose={() => setPersistenceDismissed(true)}>
           <p className="font-medium">这台设备暂未授予「持久化存储」</p>
           <p className="mt-1">
             不影响使用，只是系统在存储紧张时可能会清理本站数据。隔一阵子到「备份与设置」导出一次，就多一层保险。
