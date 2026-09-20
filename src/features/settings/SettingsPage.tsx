@@ -38,17 +38,16 @@ import { useTheme } from '../../app/useTheme.ts';
 import { backupFileName, exportToJson, markExported } from '../../backup/export.ts';
 import type { ImportMode, ImportSummary } from '../../backup/format.ts';
 import { importFromText } from '../../backup/import.ts';
-import { clearAllData } from '../../db/client.ts';
 import { checkInvariants, repairInvariants } from '../../db/repair.ts';
 import { SETTING_KEYS, getSetting, setSetting } from '../../db/settings.ts';
 import { getLibraryCounts, type LibraryCounts } from '../../db/stats.ts';
 import { downloadText, pickTextFile } from '../../platform/files.ts';
+import { AiSection } from './AiSection.tsx';
 import { BorrowerSection } from './BorrowerSection.tsx';
+import { ClearDataSection } from './ClearDataSection.tsx';
 import { SnapshotSection } from './SnapshotSection.tsx';
-import { completeChat, isAiConfigured, type AiConfig } from '../../platform/ai.ts';
 import { THEMES } from '../../platform/theme.ts';
 import {
-  describeClearAllData,
   describeRepairReport,
   describeReplaceImport,
   parseLoanPeriodDays,
@@ -224,51 +223,6 @@ export function SettingsPage(): ReactNode {
   const [deviceDraft, setDeviceDraft] = useState<string | null>(null);
   const [deviceError, setDeviceError] = useState<string | null>(null);
 
-  /* ---------------- AI 配置（05 §3） ---------------- */
-
-  const aiPrefs = useLiveQuery<AiConfig>(
-    async () => ({
-      baseUrl: await getSetting<string>(db, SETTING_KEYS.aiBaseUrl, 'https://api.openai.com/v1'),
-      apiKey: await getSetting<string>(db, SETTING_KEYS.aiApiKey, ''),
-      model: await getSetting<string>(db, SETTING_KEYS.aiModel, 'gpt-4o-mini'),
-    }),
-    [db],
-    { baseUrl: 'https://api.openai.com/v1', apiKey: '', model: 'gpt-4o-mini' },
-  );
-  const aiAction = useAsyncAction();
-  const [aiBaseDraft, setAiBaseDraft] = useState<string | null>(null);
-  const [aiKeyDraft, setAiKeyDraft] = useState<string | null>(null);
-  const [aiModelDraft, setAiModelDraft] = useState<string | null>(null);
-  const [aiTestResult, setAiTestResult] = useState<string | null>(null);
-
-  function saveAiConfig(): void {
-    void aiAction.run(async () => {
-      await setSetting(db, SETTING_KEYS.aiBaseUrl, (aiBaseDraft ?? aiPrefs.baseUrl).trim());
-      await setSetting(db, SETTING_KEYS.aiApiKey, (aiKeyDraft ?? aiPrefs.apiKey).trim());
-      await setSetting(db, SETTING_KEYS.aiModel, (aiModelDraft ?? aiPrefs.model).trim());
-      setAiBaseDraft(null);
-      setAiKeyDraft(null);
-      setAiModelDraft(null);
-      setAiTestResult(null);
-    });
-  }
-
-  function testAiConnection(): void {
-    setAiTestResult(null);
-    void aiAction.run(async () => {
-      const config: AiConfig = {
-        baseUrl: (aiBaseDraft ?? aiPrefs.baseUrl).trim(),
-        apiKey: (aiKeyDraft ?? aiPrefs.apiKey).trim(),
-        model: (aiModelDraft ?? aiPrefs.model).trim(),
-      };
-      if (!isAiConfigured(config)) {
-        throw new Error('先填好接口地址和模型名再测试');
-      }
-      const reply = await completeChat(config, '你是连通性测试。', '请只回复两个字：连通', 16);
-      setAiTestResult(`连接成功（模型回复：${reply.slice(0, 40)}${reply.length > 40 ? '…' : ''}）`);
-    });
-  }
-
   function saveLoanPeriod(): void {
     if (periodDraft === null) return;
     const parsed = parseLoanPeriodDays(periodDraft);
@@ -294,33 +248,6 @@ export function SettingsPage(): ReactNode {
     void prefsAction.run(async () => {
       await setSetting(db, SETTING_KEYS.deviceName, deviceDraft.trim());
       setDeviceDraft(null);
-    });
-  }
-
-  /* ---------------- 清空数据 ---------------- */
-
-  const clearAction = useAsyncAction();
-  const [clearOpen, setClearOpen] = useState(false);
-  const [clearAck, setClearAck] = useState(false);
-  const [clearAckError, setClearAckError] = useState<string | null>(null);
-
-  function openClear(): void {
-    clearAction.clearError();
-    setClearAckError(null);
-    setClearAck(false);
-    setClearOpen(true);
-  }
-
-  function confirmClear(): void {
-    if (!clearAck) {
-      setClearAckError('请先勾选上面的确认项');
-      return;
-    }
-    setClearAckError(null);
-    void clearAction.run(async () => {
-      await clearAllData(db);
-      setClearOpen(false);
-      setClearAck(false);
     });
   }
 
@@ -502,86 +429,11 @@ export function SettingsPage(): ReactNode {
       {/* ---------------- 借书人（04 §11.3） ---------------- */}
       <BorrowerSection />
 
-      {/* ---------------- AI 配置（05 §3） ---------------- */}
-      <Card className="space-y-4 p-4">
-        <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">AI 元数据补全</h2>
-        <p className="text-sm text-neutral-600 dark:text-neutral-300">
-          兼容 OpenAI 协议：OpenAI、DeepSeek、通义、本地 Ollama 都能接。录书时用书名或 ISBN 一键补全作者、出版社等信息。
-        </p>
-        <div className="flex flex-wrap items-end gap-2">
-          <TextField
-            label="接口地址"
-            value={aiBaseDraft ?? aiPrefs.baseUrl}
-            onValueChange={setAiBaseDraft}
-            hint="OpenAI 兼容的 base URL，一般以 /v1 结尾"
-            className="w-80"
-          />
-          <Button onClick={saveAiConfig} disabled={aiAction.pending}>
-            保存
-          </Button>
-        </div>
-        <div className="flex flex-wrap items-end gap-2">
-          <TextField
-            label="密钥"
-            type="password"
-            value={aiKeyDraft ?? aiPrefs.apiKey}
-            onValueChange={setAiKeyDraft}
-            hint="只存在这台设备上，请求只发给你填的地址；本地 Ollama 可留空"
-            className="w-80"
-          />
-          <TextField
-            label="模型名"
-            value={aiModelDraft ?? aiPrefs.model}
-            onValueChange={setAiModelDraft}
-            hint="例如 gpt-4o-mini、deepseek-chat、qwen-plus、llama3.1"
-            className="w-64"
-          />
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={testAiConnection} disabled={aiAction.pending}>
-            {aiAction.pending ? '测试中…' : '测试连接'}
-          </Button>
-          {aiTestResult !== null && <span className="text-sm text-emerald-700 dark:text-emerald-300">{aiTestResult}</span>}
-        </div>
-        {aiAction.error !== null && <InlineError>{aiAction.error}</InlineError>}
-      </Card>
+      {/* ---------------- AI 配置（05 §3、04 §11.17） ---------------- */}
+      <AiSection />
 
-      {/* ---------------- 清空数据 ---------------- */}
-      <Card className="space-y-3 p-4">
-        <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">清空数据</h2>
-        <p className="text-sm text-neutral-600 dark:text-neutral-300">
-          删除本机全部书目、副本、位置、借书人与借出记录。动手前请先导出备份；万一删错了，也可以用上方「快照」区恢复到之前的状态。主题与设备名会保留。
-        </p>
-        <Button variant="danger" onClick={openClear} disabled={counts === null}>
-          清空全部数据…
-        </Button>
-      </Card>
-
-      <ConfirmDialog
-        open={clearOpen}
-        title="清空全部数据"
-        confirmLabel="清空"
-        pending={clearAction.pending}
-        error={clearAckError ?? clearAction.error}
-        message={<p>{counts === null ? '' : describeClearAllData(counts)}</p>}
-        onCancel={() => {
-          setClearOpen(false);
-          setClearAck(false);
-          setClearAckError(null);
-          clearAction.clearError();
-        }}
-        onConfirm={confirmClear}
-      >
-        <label className="flex min-h-11 items-start gap-2 text-sm text-neutral-700 dark:text-neutral-300">
-          <input
-            type="checkbox"
-            className="mt-0.5 h-5 w-5 accent-red-600"
-            checked={clearAck}
-            onChange={(event) => setClearAck(event.target.checked)}
-          />
-          <span>我确认：先导出过备份，或确定这些数据不再需要。</span>
-        </label>
-      </ConfirmDialog>
+      {/* ---------------- 清空数据（04 §6） ---------------- */}
+      <ClearDataSection counts={counts} />
 
       <ConfirmDialog
         open={replaceOpen}
